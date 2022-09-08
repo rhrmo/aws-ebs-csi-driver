@@ -26,4 +26,4 @@ Vagrantfile
 *.DS_Store
 
 # Vendor dir
-vendor/
+#vendor/

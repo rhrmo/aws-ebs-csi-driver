@@ -1,20 +1,3 @@
 approvers:
-- bertinatto
-- jsafrane
-- gnufied
-- leakingtapan
-- wongma7
-- AndyXiangLi
-- gtxu
-- torredil
-- rdpsin
-reviewers:
-- bertinatto
-- jsafrane
-- gnufied
-- leakingtapan
-- wongma7
-- AndyXiangLi
-- gtxu
-- torredil
-- rdpsin
+- openshift-storage-maintainers
+component: "Storage"
