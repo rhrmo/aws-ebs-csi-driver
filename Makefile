@@ -12,7 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-VERSION?=v1.14.1
+# Carry: clear all Kubernetes env. variables. generate-kustomize target below
+# would get the actual namespace where this Makefile runs and file it into
+# generated kustomize yaml files.
+undefine KUBECONFIG
+undefine KUBERNETES_PORT
+undefine KUBERNETES_PORT_443_TCP
+undefine KUBERNETES_PORT_443_TCP_ADDR
+undefine KUBERNETES_PORT_443_TCP_PORT
+undefine KUBERNETES_PORT_443_TCP_PROTO
+undefine KUBERNETES_SERVICE_HOST
+undefine KUBERNETES_SERVICE_PORT
+undefine KUBERNETES_SERVICE_PORT_HTTPS
+# Carry: VERSION is set by CI to go version, not CSI driver version
+undefine VERSION
+
+VERSION?=v1.15.0
 
 PKG=github.com/kubernetes-sigs/aws-ebs-csi-driver
 GIT_COMMIT?=$(shell git rev-parse HEAD)
