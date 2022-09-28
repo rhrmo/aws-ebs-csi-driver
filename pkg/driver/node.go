@@ -21,17 +21,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/cloud"
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/driver/internal"
+	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/util"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/volume"
-	mountutils "k8s.io/mount-utils"
 )
 
 const (
@@ -41,8 +40,10 @@ const (
 	FSTypeExt3 = "ext3"
 	// FSTypeExt4 represents the ext4 filesystem type
 	FSTypeExt4 = "ext4"
-	// FSTypeXfs represents te xfs filesystem type
+	// FSTypeXfs represents the xfs filesystem type
 	FSTypeXfs = "xfs"
+	// FSTypeNtfs represents the ntfs filesystem type
+	FSTypeNtfs = "ntfs"
 
 	// default file system type to be used when it is not provided
 	defaultFsType = FSTypeExt4
@@ -56,10 +57,19 @@ const (
 
 	// VolumeOperationAlreadyExists is message fmt returned to CO when there is another in-flight call on the given volumeID
 	VolumeOperationAlreadyExists = "An operation with the given volume=%q is already in progress"
+
+	//sbeDeviceVolumeAttachmentLimit refers to the maximum number of volumes that can be attached to an instance on snow.
+	sbeDeviceVolumeAttachmentLimit = 10
 )
 
 var (
-	ValidFSTypes = []string{FSTypeExt2, FSTypeExt3, FSTypeExt4, FSTypeXfs}
+	ValidFSTypes = map[string]struct{}{
+		FSTypeExt2: {},
+		FSTypeExt3: {},
+		FSTypeExt4: {},
+		FSTypeXfs:  {},
+		FSTypeNtfs: {},
+	}
 )
 
 var (
@@ -84,7 +94,9 @@ type nodeService struct {
 // it panics if failed to create the service
 func newNodeService(driverOptions *DriverOptions) nodeService {
 	klog.V(5).Infof("[Debug] Retrieving node info from metadata service")
-	metadata, err := cloud.NewMetadataService(cloud.DefaultEC2MetadataClient, cloud.DefaultKubernetesAPIClient)
+	region := os.Getenv("AWS_REGION")
+	klog.Infof("regionFromSession Node service %v", region)
+	metadata, err := cloud.NewMetadataService(cloud.DefaultEC2MetadataClient, cloud.DefaultKubernetesAPIClient, region)
 	if err != nil {
 		panic(err)
 	}
@@ -145,6 +157,11 @@ func (d *nodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		fsType = defaultFsType
 	}
 
+	_, ok := ValidFSTypes[strings.ToLower(fsType)]
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "NodeStageVolume: invalid fstype %s", fsType)
+	}
+
 	mountOptions := collectMountOptions(fsType, mountVolume.MountFlags)
 
 	if ok := d.inFlight.Insert(volumeID); !ok {
@@ -168,6 +185,7 @@ func (d *nodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 			klog.Warningf("NodeStageVolume: invalid partition config, will ignore. partition = %v", part)
 		}
 	}
+
 	source, err := d.findDevicePath(devicePath, volumeID, partition)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to find device path %s. %v", devicePath, err)
@@ -213,14 +231,17 @@ func (d *nodeService) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		msg := fmt.Sprintf("could not format %q and mount it at %q: %v", source, target, err)
 		return nil, status.Error(codes.Internal, msg)
 	}
-	//TODO: use the common function from vendor pkg kubernetes/mount-util
 
 	needResize, err := d.mounter.NeedResize(source, target)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not determine if volume %q (%q) need to be resized:  %v", req.GetVolumeId(), source, err)
 	}
+
 	if needResize {
-		r := mountutils.NewResizeFs(d.mounter.(*NodeMounter).Exec)
+		r, err := d.mounter.NewResizeFs()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "Error attempting to create new ResizeFs:  %v", err)
+		}
 		klog.V(2).Infof("Volume %s needs resizing", source)
 		if _, err := r.Resize(source, target); err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not resize volume %q (%q):  %v", volumeID, source, err)
@@ -271,7 +292,7 @@ func (d *nodeService) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	}
 
 	klog.V(4).Infof("NodeUnstageVolume: unmounting %s", target)
-	err = d.mounter.Unmount(target)
+	err = d.mounter.Unstage(target)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not unmount target %q: %v", target, err)
 	}
@@ -308,7 +329,7 @@ func (d *nodeService) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 		// VolumeCapability is nil, check if volumePath point to a block device
 		isBlock, err := d.IsBlockDevice(volumePath)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to determine device path for volumePath [%v]: %v", volumePath, err)
+			return nil, status.Errorf(codes.Internal, "failed to determine if volumePath [%v] is a block device: %v", volumePath, err)
 		}
 		if isBlock {
 			// Skip resizing for Block NodeExpandVolume
@@ -321,19 +342,20 @@ func (d *nodeService) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 		}
 	}
 
-	// TODO this won't make sense on Windows with csi-proxy
-	args := []string{"-o", "source", "--noheadings", "--target", volumePath}
-	output, err := d.mounter.(*NodeMounter).Exec.Command("findmnt", args...).Output()
+	deviceName, _, err := d.mounter.GetDeviceNameFromMount(volumePath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not determine device path: %v", err)
-
-	}
-	devicePath := strings.TrimSpace(string(output))
-	if len(devicePath) == 0 {
-		return nil, status.Errorf(codes.Internal, "Could not get valid device for mount path: %q", req.GetVolumePath())
+		return nil, status.Errorf(codes.Internal, "failed to get device name from mount %s: %v", volumePath, err)
 	}
 
-	r := mountutils.NewResizeFs(d.mounter.(*NodeMounter).Exec)
+	devicePath, err := d.findDevicePath(deviceName, volumeID, "")
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to find device path for device name %s for mount %s: %v", deviceName, req.GetVolumePath(), err)
+	}
+
+	r, err := d.mounter.NewResizeFs()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Error attempting to create new ResizeFs:  %v", err)
+	}
 
 	// TODO: lock per volume ID to have some idempotency
 	if _, err := r.Resize(devicePath, volumePath); err != nil {
@@ -420,7 +442,7 @@ func (d *nodeService) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	}()
 
 	klog.V(4).Infof("NodeUnpublishVolume: unmounting %s", target)
-	err := d.mounter.Unmount(target)
+	err := d.mounter.Unpublish(target)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not unmount %q: %v", target, err)
 	}
@@ -624,7 +646,7 @@ func (d *nodeService) isMounted(source string, target string) (bool, error) {
 		_, pathErr := d.mounter.PathExists(target)
 		if pathErr != nil && d.mounter.IsCorruptedMnt(pathErr) {
 			klog.V(4).Infof("NodePublishVolume: Target path %q is a corrupted mount. Trying to unmount.", target)
-			if mntErr := d.mounter.Unmount(target); mntErr != nil {
+			if mntErr := d.mounter.Unpublish(target); mntErr != nil {
 				return false, status.Errorf(codes.Internal, "Unable to unmount the target %q : %v", target, mntErr)
 			}
 			//After successful unmount, the device is ready to be mounted.
@@ -678,6 +700,11 @@ func (d *nodeService) nodePublishVolumeForFileSystem(req *csi.NodePublishVolumeR
 			fsType = defaultFsType
 		}
 
+		_, ok := ValidFSTypes[strings.ToLower(fsType)]
+		if !ok {
+			return status.Errorf(codes.InvalidArgument, "NodePublishVolume: invalid fstype %s", fsType)
+		}
+
 		mountOptions = collectMountOptions(fsType, mountOptions)
 		klog.V(4).Infof("NodePublishVolume: mounting %s at %s with option %s as fstype %s", source, target, mountOptions, fsType)
 		if err := d.mounter.Mount(source, target, fsType, mountOptions); err != nil {
@@ -693,12 +720,38 @@ func (d *nodeService) getVolumesLimit() int64 {
 	if d.driverOptions.volumeAttachLimit >= 0 {
 		return d.driverOptions.volumeAttachLimit
 	}
-	ebsNitroInstanceTypeRegex := "^[cmr]5.*|t3|z1d"
-	instanceType := d.metadata.GetInstanceType()
-	if ok, _ := regexp.MatchString(ebsNitroInstanceTypeRegex, instanceType); ok {
-		return defaultMaxEBSNitroVolumes
+
+	if util.IsSBE(d.metadata.GetRegion()) {
+		return sbeDeviceVolumeAttachmentLimit
 	}
-	return defaultMaxEBSVolumes
+
+	instanceType := d.metadata.GetInstanceType()
+
+	isNitro := cloud.IsNitroInstanceType(instanceType)
+	availableAttachments := cloud.GetMaxAttachments(isNitro)
+	blockVolumes := d.metadata.GetNumBlockDeviceMappings()
+
+	// For Nitro instances, attachments are shared between EBS volumes, ENIs and NVMe instance stores
+	if isNitro {
+		enis := d.metadata.GetNumAttachedENIs()
+		nvmeInstanceStoreVolumes := cloud.GetNVMeInstanceStoreVolumesForInstanceType(instanceType)
+		availableAttachments = availableAttachments - enis - blockVolumes - nvmeInstanceStoreVolumes
+	} else {
+		availableAttachments -= blockVolumes
+	}
+	maxEBSAttachments, ok := cloud.GetEBSLimitForInstanceType(instanceType)
+	if ok {
+		availableAttachments = min(maxEBSAttachments, availableAttachments)
+	}
+
+	return int64(availableAttachments)
+}
+
+func min(x, y int) int {
+	if x <= y {
+		return x
+	}
+	return y
 }
 
 // hasMountOption returns a boolean indicating whether the given

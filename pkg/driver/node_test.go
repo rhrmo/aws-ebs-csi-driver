@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 /*
 Copyright 2019 The Kubernetes Authors.
 
@@ -45,8 +48,10 @@ func TestNodeStageVolume(t *testing.T) {
 	var (
 		targetPath     = "/test/path"
 		devicePath     = "/dev/fake"
-		nvmeDevicePath = "/dev/fakenvme1n1"
-		stdVolCap      = &csi.VolumeCapability{
+		nvmeDevicePath = "/dev/nvmefake1n1"
+		deviceFileInfo = fs.FileInfo(&fakeFileInfo{devicePath, os.ModeDevice})
+		//deviceSymlinkFileInfo = fs.FileInfo(&fakeFileInfo{nvmeDevicePath, os.ModeSymlink})
+		stdVolCap = &csi.VolumeCapability{
 			AccessType: &csi.VolumeCapability_Mount{
 				Mount: &csi.VolumeCapability_MountVolume{
 					FsType: FSTypeExt4,
@@ -67,7 +72,7 @@ func TestNodeStageVolume(t *testing.T) {
 			mockMounter.EXPECT().MakeDir(targetPath).Return(nil)
 			mockMounter.EXPECT().GetDeviceNameFromMount(targetPath).Return("", 1, nil)
 			mockMounter.EXPECT().PathExists(gomock.Eq(devicePath)).Return(true, nil)
-			mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
+			mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil)
 			mockMounter.EXPECT().NeedResize(gomock.Eq(devicePath), gomock.Eq(targetPath)).Return(false, nil)
 		}
 	)
@@ -188,7 +193,7 @@ func TestNodeStageVolume(t *testing.T) {
 				mockMounter.EXPECT().PathExists(gomock.Eq(targetPath)).Return(true, nil)
 				mockMounter.EXPECT().GetDeviceNameFromMount(targetPath).Return(devicePath, 1, nil)
 				mockMounter.EXPECT().PathExists(gomock.Eq(devicePath)).Return(true, nil)
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
+				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil)
 
 				mockMounter.EXPECT().FormatAndMount(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 			},
@@ -233,7 +238,7 @@ func TestNodeStageVolume(t *testing.T) {
 				mockMounter.EXPECT().MakeDir(targetPath).Return(nil)
 				mockMounter.EXPECT().GetDeviceNameFromMount(targetPath).Return("", 1, nil)
 				mockMounter.EXPECT().PathExists(gomock.Eq(devicePath)).Return(true, nil)
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
+				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil)
 
 				// The device path argument should be canonicalized to contain the
 				// partition
@@ -406,7 +411,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 				}
 
 				mockMounter.EXPECT().GetDeviceNameFromMount(gomock.Eq(targetPath)).Return(devicePath, 1, nil)
-				mockMounter.EXPECT().Unmount(gomock.Eq(targetPath)).Return(nil)
+				mockMounter.EXPECT().Unstage(gomock.Eq(targetPath)).Return(nil)
 
 				req := &csi.NodeUnstageVolumeRequest{
 					StagingTargetPath: targetPath,
@@ -466,7 +471,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 				}
 
 				mockMounter.EXPECT().GetDeviceNameFromMount(gomock.Eq(targetPath)).Return(devicePath, 2, nil)
-				mockMounter.EXPECT().Unmount(gomock.Eq(targetPath)).Return(nil)
+				mockMounter.EXPECT().Unstage(gomock.Eq(targetPath)).Return(nil)
 
 				req := &csi.NodeUnstageVolumeRequest{
 					StagingTargetPath: targetPath,
@@ -594,6 +599,7 @@ func TestNodePublishVolume(t *testing.T) {
 	targetPath := "/test/path"
 	stagingTargetPath := "/test/staging/path"
 	devicePath := "/dev/fake"
+	deviceFileInfo := fs.FileInfo(&fakeFileInfo{devicePath, os.ModeDevice})
 	stdVolCap := &csi.VolumeCapability{
 		AccessType: &csi.VolumeCapability_Mount{
 			Mount: &csi.VolumeCapability_MountVolume{},
@@ -734,7 +740,7 @@ func TestNodePublishVolume(t *testing.T) {
 
 				mockMounter.EXPECT().MakeDir(gomock.Eq(targetPath)).Return(nil)
 				mockMounter.EXPECT().IsLikelyNotMountPoint(gomock.Eq(targetPath)).Return(true, errors.New("internal system error"))
-				mockMounter.EXPECT().Unmount(gomock.Eq(targetPath)).Return(nil)
+				mockMounter.EXPECT().Unpublish(gomock.Eq(targetPath)).Return(nil)
 				mockMounter.EXPECT().Mount(gomock.Eq(stagingTargetPath), gomock.Eq(targetPath), gomock.Eq(defaultFsType), gomock.Eq([]string{"bind"})).Return(nil)
 
 				req := &csi.NodePublishVolumeRequest{
@@ -904,7 +910,7 @@ func TestNodePublishVolume(t *testing.T) {
 				mockMounter.EXPECT().MakeFile(targetPath).Return(nil)
 				mockMounter.EXPECT().Mount(gomock.Eq(devicePath), gomock.Eq(targetPath), gomock.Eq(""), gomock.Eq([]string{"bind"})).Return(nil)
 				mockMounter.EXPECT().IsLikelyNotMountPoint(gomock.Eq(targetPath)).Return(true, nil)
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
+				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil)
 
 				req := &csi.NodePublishVolumeRequest{
 					PublishContext:    map[string]string{DevicePathKey: "/dev/fake"},
@@ -951,7 +957,7 @@ func TestNodePublishVolume(t *testing.T) {
 				mockMounter.EXPECT().MakeDir(gomock.Eq("/test")).Return(nil)
 				mockMounter.EXPECT().MakeFile(targetPath).Return(nil)
 				mockMounter.EXPECT().IsLikelyNotMountPoint(gomock.Eq(targetPath)).Return(false, nil)
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
+				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil)
 
 				req := &csi.NodePublishVolumeRequest{
 					PublishContext:    map[string]string{DevicePathKey: "/dev/fake"},
@@ -993,6 +999,7 @@ func TestNodePublishVolume(t *testing.T) {
 
 				gomock.InOrder(
 					mockMounter.EXPECT().PathExists(gomock.Eq(devicePath)).Return(true, nil),
+					mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil),
 					mockMounter.EXPECT().PathExists(gomock.Eq("/test")).Return(false, nil),
 					mockMounter.EXPECT().PathExists(gomock.Eq(targetPath)).Return(true, nil),
 				)
@@ -1000,7 +1007,6 @@ func TestNodePublishVolume(t *testing.T) {
 				mockMounter.EXPECT().MakeDir(gomock.Eq("/test")).Return(nil)
 				mockMounter.EXPECT().MakeFile(targetPath).Return(nil)
 				mockMounter.EXPECT().IsLikelyNotMountPoint(gomock.Eq(targetPath)).Return(true, errors.New("Internal System Error"))
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
 
 				req := &csi.NodePublishVolumeRequest{
 					PublishContext:    map[string]string{DevicePathKey: "/dev/fake"},
@@ -1040,6 +1046,7 @@ func TestNodePublishVolume(t *testing.T) {
 
 				gomock.InOrder(
 					mockMounter.EXPECT().PathExists(gomock.Eq(devicePath)).Return(true, nil),
+					mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil),
 					mockMounter.EXPECT().PathExists(gomock.Eq("/test")).Return(false, nil),
 					mockMounter.EXPECT().PathExists(gomock.Eq(targetPath)).Return(true, errors.New("CorruptedMntError")),
 				)
@@ -1048,10 +1055,9 @@ func TestNodePublishVolume(t *testing.T) {
 
 				mockMounter.EXPECT().MakeDir(gomock.Eq("/test")).Return(nil)
 				mockMounter.EXPECT().MakeFile(targetPath).Return(nil)
-				mockMounter.EXPECT().Unmount(gomock.Eq(targetPath)).Return(nil)
+				mockMounter.EXPECT().Unpublish(gomock.Eq(targetPath)).Return(nil)
 				mockMounter.EXPECT().IsLikelyNotMountPoint(gomock.Eq(targetPath)).Return(true, errors.New("Internal System Error"))
 				mockMounter.EXPECT().Mount(gomock.Eq(devicePath), gomock.Eq(targetPath), gomock.Any(), gomock.Any()).Return(nil)
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
 
 				req := &csi.NodePublishVolumeRequest{
 					PublishContext:    map[string]string{DevicePathKey: "/dev/fake"},
@@ -1099,7 +1105,7 @@ func TestNodePublishVolume(t *testing.T) {
 				mockMounter.EXPECT().MakeFile(targetPath).Return(nil)
 				mockMounter.EXPECT().Mount(gomock.Eq(devicePathWithPartition), gomock.Eq(targetPath), gomock.Eq(""), gomock.Eq([]string{"bind"})).Return(nil)
 				mockMounter.EXPECT().IsLikelyNotMountPoint(gomock.Eq(targetPath)).Return(true, nil)
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
+				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil)
 
 				req := &csi.NodePublishVolumeRequest{
 					PublishContext:    map[string]string{DevicePathKey: "/dev/fake"},
@@ -1148,7 +1154,7 @@ func TestNodePublishVolume(t *testing.T) {
 				mockMounter.EXPECT().MakeFile(targetPath).Return(nil)
 				mockMounter.EXPECT().Mount(gomock.Eq(devicePath), gomock.Eq(targetPath), gomock.Eq(""), gomock.Eq([]string{"bind"})).Return(nil)
 				mockMounter.EXPECT().IsLikelyNotMountPoint(gomock.Eq(targetPath)).Return(true, nil)
-				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(nvmeName)).Return(nil, os.ErrNotExist)
+				mockDeviceIdentifier.EXPECT().Lstat(gomock.Eq(devicePath)).Return(deviceFileInfo, nil)
 
 				req := &csi.NodePublishVolumeRequest{
 					PublishContext:    map[string]string{DevicePathKey: "/dev/fake"},
@@ -1595,7 +1601,7 @@ func TestNodeUnpublishVolume(t *testing.T) {
 					VolumeId:   volumeID,
 				}
 
-				mockMounter.EXPECT().Unmount(gomock.Eq(targetPath)).Return(nil)
+				mockMounter.EXPECT().Unpublish(gomock.Eq(targetPath)).Return(nil)
 				_, err := awsDriver.NodeUnpublishVolume(context.TODO(), req)
 				if err != nil {
 					t.Fatalf("Expect no error but got: %v", err)
@@ -1653,7 +1659,7 @@ func TestNodeUnpublishVolume(t *testing.T) {
 			},
 		},
 		{
-			name: "fail error on unmount",
+			name: "fail error on unpublish",
 			testFunc: func(t *testing.T) {
 				mockCtl := gomock.NewController(t)
 				defer mockCtl.Finish()
@@ -1674,7 +1680,7 @@ func TestNodeUnpublishVolume(t *testing.T) {
 					VolumeId:   volumeID,
 				}
 
-				mockMounter.EXPECT().Unmount(gomock.Eq(targetPath)).Return(errors.New("test Unmount error"))
+				mockMounter.EXPECT().Unpublish(gomock.Eq(targetPath)).Return(errors.New("test Unpublish error"))
 				_, err := awsDriver.NodeUnpublishVolume(context.TODO(), req)
 				expectErr(t, err, codes.Internal)
 			},
@@ -1907,17 +1913,22 @@ func TestNodeGetInfo(t *testing.T) {
 		instanceID        string
 		instanceType      string
 		availabilityZone  string
+		region            string
+		attachedENIs      int
+		blockDevices      int
 		volumeAttachLimit int64
 		expMaxVolumes     int64
 		outpostArn        arn.ARN
 	}{
 		{
-			name:              "success normal",
+			name:              "non-nitro instance success normal",
 			instanceID:        "i-123456789abcdef01",
 			instanceType:      "t2.medium",
 			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
 			volumeAttachLimit: -1,
 			expMaxVolumes:     39,
+			attachedENIs:      1,
 			outpostArn:        emptyOutpostArn,
 		},
 		{
@@ -1925,16 +1936,30 @@ func TestNodeGetInfo(t *testing.T) {
 			instanceID:        "i-123456789abcdef01",
 			instanceType:      "t2.medium",
 			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
 			volumeAttachLimit: 42,
 			expMaxVolumes:     42,
 			outpostArn:        emptyOutpostArn,
 		},
 		{
-			name:              "success normal with NVMe",
+			name:              "nitro instance success normal",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "t3.xlarge",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      2,
+			expMaxVolumes:     26, // 28 (max) - 2 (enis)
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "nitro instance success normal with NVMe",
 			instanceID:        "i-123456789abcdef01",
 			instanceType:      "m5d.large",
 			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
 			volumeAttachLimit: -1,
+			attachedENIs:      2,
 			expMaxVolumes:     25,
 			outpostArn:        emptyOutpostArn,
 		},
@@ -1943,6 +1968,7 @@ func TestNodeGetInfo(t *testing.T) {
 			instanceID:        "i-123456789abcdef01",
 			instanceType:      "m5d.large",
 			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
 			volumeAttachLimit: 30,
 			expMaxVolumes:     30,
 			outpostArn:        emptyOutpostArn,
@@ -1952,9 +1978,66 @@ func TestNodeGetInfo(t *testing.T) {
 			instanceID:        "i-123456789abcdef01",
 			instanceType:      "m5d.large",
 			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
 			volumeAttachLimit: 30,
 			expMaxVolumes:     30,
 			outpostArn:        validOutpostArn,
+		},
+		{
+			name:              "baremetal instances max EBS attachment limit",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "c6i.metal",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      1,
+			expMaxVolumes:     27, // 28 (max) - 1 (eni)
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "high memory baremetal instances max EBS attachment limit",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "u-12tb1.metal",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      1,
+			expMaxVolumes:     19,
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "mac instances max EBS attachment limit",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "mac1.metal",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      1,
+			expMaxVolumes:     16,
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "inf1.24xlarge instace max EBS attachment limit",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "inf1.24xlarge",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      1,
+			expMaxVolumes:     11,
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "nitro instances already attached EBS volumes",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "t3.xlarge",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      1,
+			blockDevices:      2,
+			expMaxVolumes:     25,
+			outpostArn:        emptyOutpostArn,
 		},
 	}
 	for _, tc := range testCases {
@@ -1973,9 +2056,14 @@ func TestNodeGetInfo(t *testing.T) {
 			mockMetadata.EXPECT().GetInstanceID().Return(tc.instanceID)
 			mockMetadata.EXPECT().GetAvailabilityZone().Return(tc.availabilityZone)
 			mockMetadata.EXPECT().GetOutpostArn().Return(tc.outpostArn)
+			mockMetadata.EXPECT().GetRegion().Return(tc.region).AnyTimes()
 
 			if tc.volumeAttachLimit < 0 {
 				mockMetadata.EXPECT().GetInstanceType().Return(tc.instanceType)
+				mockMetadata.EXPECT().GetNumBlockDeviceMappings().Return(tc.blockDevices)
+				if cloud.IsNitroInstanceType(tc.instanceType) {
+					mockMetadata.EXPECT().GetNumAttachedENIs().Return(tc.attachedENIs)
+				}
 			}
 
 			awsDriver := &nodeService{

@@ -24,7 +24,7 @@ import (
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/driver"
 	"k8s.io/component-base/metrics/legacyregistry"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 func main() {
@@ -51,6 +51,7 @@ func main() {
 		driver.WithVolumeAttachLimit(options.NodeOptions.VolumeAttachLimit),
 		driver.WithKubernetesClusterID(options.ControllerOptions.KubernetesClusterID),
 		driver.WithAwsSdkDebugLog(options.ControllerOptions.AwsSdkDebugLog),
+		driver.WithWarnOnInvalidTag(options.ControllerOptions.WarnOnInvalidTag),
 	)
 	if err != nil {
 		klog.Fatalln(err)

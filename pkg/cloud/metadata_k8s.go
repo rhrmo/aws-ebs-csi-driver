@@ -45,9 +45,9 @@ func KubernetesAPIInstanceInfo(clientset kubernetes.Interface) (*Metadata, error
 		return nil, fmt.Errorf("node providerID empty, cannot parse")
 	}
 
-	awsRegionRegex := "([a-z]{2}(-gov)?)-(central|(north|south)?(east|west)?)-[0-9]"
-	awsAvailabilityZoneRegex := "([a-z]{2}(-gov)?)-(central|(north|south)?(east|west)?)-[0-9][a-z]"
-	awsInstanceIDRegex := "i-[a-z0-9]+$"
+	awsRegionRegex := "(snow)|(([a-z]{2}(-gov)?)-(central|(north|south)?(east|west)?)-[0-9])"
+	awsAvailabilityZoneRegex := "(snow)|(([a-z]{2}(-gov)?)-(central|(north|south)?(east|west)?)-[0-9][a-z])"
+	awsInstanceIDRegex := "s\\.i-[a-z0-9]+|i-[a-z0-9]+$"
 
 	re := regexp.MustCompile(awsRegionRegex)
 	region := re.FindString(providerID)
@@ -73,10 +73,12 @@ func KubernetesAPIInstanceInfo(clientset kubernetes.Interface) (*Metadata, error
 	}
 
 	instanceInfo := Metadata{
-		InstanceID:       instanceID,
-		InstanceType:     instanceType,
-		Region:           region,
-		AvailabilityZone: availabilityZone,
+		InstanceID:             instanceID,
+		InstanceType:           instanceType,
+		Region:                 region,
+		AvailabilityZone:       availabilityZone,
+		NumAttachedENIs:        1, // All nodes have at least 1 attached ENI, so we'll use that
+		NumBlockDeviceMappings: 0,
 	}
 
 	return &instanceInfo, nil

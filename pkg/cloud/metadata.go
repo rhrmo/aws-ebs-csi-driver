@@ -21,20 +21,30 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/arn"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // Metadata is info about the ec2 instance on which the driver is running
 type Metadata struct {
-	InstanceID       string
-	InstanceType     string
-	Region           string
-	AvailabilityZone string
-	OutpostArn       arn.ARN
+	InstanceID             string
+	InstanceType           string
+	Region                 string
+	AvailabilityZone       string
+	NumAttachedENIs        int
+	NumBlockDeviceMappings int
+	OutpostArn             arn.ARN
 }
 
-// OutpostArnEndpoint is the ec2 instance metadata endpoint to query to get the outpost arn
-const OutpostArnEndpoint string = "outpost-arn"
+const (
+	// OutpostArnEndpoint is the ec2 instance metadata endpoint to query to get the outpost arn
+	outpostArnEndpoint string = "outpost-arn"
+
+	// enisEndpoint is the ec2 instance metadata endpoint to query the number of attached ENIs
+	enisEndpoint string = "network/interfaces/macs"
+
+	// blockDevicesEndpoint is the ec2 instance metadata endpoint to query the number of attached block devices
+	blockDevicesEndpoint string = "block-device-mapping"
+)
 
 var _ MetadataService = &Metadata{}
 
@@ -58,12 +68,20 @@ func (m *Metadata) GetAvailabilityZone() string {
 	return m.AvailabilityZone
 }
 
+func (m *Metadata) GetNumAttachedENIs() int {
+	return m.NumAttachedENIs
+}
+
+func (m *Metadata) GetNumBlockDeviceMappings() int {
+	return m.NumBlockDeviceMappings
+}
+
 // GetOutpostArn returns outpost arn if instance is running on an outpost. empty otherwise.
 func (m *Metadata) GetOutpostArn() arn.ARN {
 	return m.OutpostArn
 }
 
-func NewMetadataService(ec2MetadataClient EC2MetadataClient, k8sAPIClient KubernetesAPIClient) (MetadataService, error) {
+func NewMetadataService(ec2MetadataClient EC2MetadataClient, k8sAPIClient KubernetesAPIClient, region string) (MetadataService, error) {
 	klog.Infof("retrieving instance data from ec2 metadata")
 	svc, err := ec2MetadataClient()
 	if !svc.Available() {
@@ -72,7 +90,7 @@ func NewMetadataService(ec2MetadataClient EC2MetadataClient, k8sAPIClient Kubern
 		klog.Warningf("error creating ec2 metadata client: %v", err)
 	} else {
 		klog.Infof("ec2 metadata is available")
-		return EC2MetadataInstanceInfo(svc)
+		return EC2MetadataInstanceInfo(svc, region)
 	}
 
 	klog.Infof("retrieving instance data from kubernetes api")

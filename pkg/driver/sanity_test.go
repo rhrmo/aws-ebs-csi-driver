@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package driver
 
 import (
@@ -318,8 +321,24 @@ func (f *fakeMounter) MountSensitiveWithoutSystemd(source string, target string,
 	return nil
 }
 
+func (f *fakeMounter) MountSensitiveWithoutSystemdWithMountFlags(source string, target string, fstype string, options []string, sensitiveOptions []string, mountFlags []string) error {
+	return nil
+}
+
 func (f *fakeMounter) Unmount(target string) error {
 	return nil
+}
+
+func (f *fakeMounter) Unstage(target string) error {
+	return nil
+}
+
+func (f *fakeMounter) Unpublish(target string) error {
+	return nil
+}
+
+func (f *fakeMounter) NewResizeFs() (Resizefs, error) {
+	return nil, nil
 }
 
 func (f *fakeMounter) List() ([]mount.MountPoint, error) {

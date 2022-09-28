@@ -12,17 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM --platform=$BUILDPLATFORM golang:1.17 AS builder
+# See
+# https://docs.docker.com/engine/reference/builder/#automatic-platform-args-in-the-global-scope
+# for info on BUILDPLATFORM, TARGETOS, TARGETARCH, etc.
+FROM --platform=$BUILDPLATFORM golang:1.19 AS builder
 WORKDIR /go/src/github.com/kubernetes-sigs/aws-ebs-csi-driver
+COPY go.* .
+ARG GOPROXY
+RUN go mod download
 COPY . .
-ARG OS
-ARG ARCH
-RUN make $OS/$ARCH
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION
+RUN OS=$TARGETOS ARCH=$TARGETARCH make $TARGETOS/$TARGETARCH
 
-FROM amazonlinux:2 AS linux-amazon
-RUN yum update -y && \
-    yum install ca-certificates e2fsprogs xfsprogs util-linux -y && \
-    yum clean all
+FROM public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-csi-ebs:latest.2 AS linux-amazon
 COPY --from=builder /go/src/github.com/kubernetes-sigs/aws-ebs-csi-driver/bin/aws-ebs-csi-driver /bin/aws-ebs-csi-driver
 ENTRYPOINT ["/bin/aws-ebs-csi-driver"]
 
@@ -30,10 +34,10 @@ FROM mcr.microsoft.com/windows/servercore:1809 AS windows-1809
 COPY --from=builder /go/src/github.com/kubernetes-sigs/aws-ebs-csi-driver/bin/aws-ebs-csi-driver.exe /aws-ebs-csi-driver.exe
 ENTRYPOINT ["/aws-ebs-csi-driver.exe"]
 
-FROM mcr.microsoft.com/windows/servercore:2004 AS windows-2004
+FROM mcr.microsoft.com/windows/servercore:20H2 AS windows-20H2
 COPY --from=builder /go/src/github.com/kubernetes-sigs/aws-ebs-csi-driver/bin/aws-ebs-csi-driver.exe /aws-ebs-csi-driver.exe
 ENTRYPOINT ["/aws-ebs-csi-driver.exe"]
 
-FROM mcr.microsoft.com/windows/servercore:20H2 AS windows-20H2
+FROM mcr.microsoft.com/windows/servercore:ltsc2019 AS windows-ltsc2019
 COPY --from=builder /go/src/github.com/kubernetes-sigs/aws-ebs-csi-driver/bin/aws-ebs-csi-driver.exe /aws-ebs-csi-driver.exe
 ENTRYPOINT ["/aws-ebs-csi-driver.exe"]

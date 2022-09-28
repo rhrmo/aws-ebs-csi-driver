@@ -55,7 +55,6 @@ function eksctl_create_cluster() {
   fi
 
   loudecho "Cluster ${CLUSTER_NAME} kubecfg written to ${KUBECONFIG}"
-
   loudecho "Getting cluster ${CLUSTER_NAME}"
   ${BIN} get cluster "${CLUSTER_NAME}"
 

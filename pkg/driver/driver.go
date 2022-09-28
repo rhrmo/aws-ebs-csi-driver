@@ -24,7 +24,7 @@ import (
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/util"
 	"google.golang.org/grpc"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // Mode is the operating mode of the CSI driver.
@@ -66,6 +66,7 @@ type DriverOptions struct {
 	volumeAttachLimit   int64
 	kubernetesClusterID string
 	awsSdkDebugLog      bool
+	warnOnInvalidTag    bool
 }
 
 func NewDriver(options ...func(*DriverOptions)) (*Driver, error) {
@@ -189,5 +190,11 @@ func WithKubernetesClusterID(clusterID string) func(*DriverOptions) {
 func WithAwsSdkDebugLog(enableSdkDebugLog bool) func(*DriverOptions) {
 	return func(o *DriverOptions) {
 		o.awsSdkDebugLog = enableSdkDebugLog
+	}
+}
+
+func WithWarnOnInvalidTag(warnOnInvalidTag bool) func(*DriverOptions) {
+	return func(o *DriverOptions) {
+		o.warnOnInvalidTag = warnOnInvalidTag
 	}
 }

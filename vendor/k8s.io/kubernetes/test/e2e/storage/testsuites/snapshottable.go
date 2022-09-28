@@ -142,8 +142,10 @@ func (s *snapshottableTestSuite) DefineTests(driver storageframework.TestDriver,
 			claimSize = pvc.Spec.Resources.Requests.Storage().String()
 
 			ginkgo.By("[init] starting a pod to use the claim")
-			originalMntTestData = fmt.Sprintf("hello from %s namespace", pvc.GetNamespace())
-			command := fmt.Sprintf("echo '%s' > %s", originalMntTestData, datapath)
+			originalMntTestData = fmt.Sprintf("hello from %s namespace", f.Namespace.Name)
+			// After writing data to a file `sync` flushes the data from memory to disk.
+			// sync is available in the Linux and Windows versions of agnhost.
+			command := fmt.Sprintf("echo '%s' > %s; sync", originalMntTestData, datapath)
 
 			pod := RunInPodWithVolume(cs, f.Timeouts, pvc.Namespace, pvc.Name, "pvc-snapshottable-tester", command, config.ClientNodeSelection)
 
@@ -164,40 +166,45 @@ func (s *snapshottableTestSuite) DefineTests(driver storageframework.TestDriver,
 			// - a pod was created with a PV that's supposed to have data
 			//
 			// However there's a caching issue that @jinxu97 explained and it's related with the pod & volume
-			// lifecycle in windows, to understand it we first analyze what the volumemanager does:
+			// lifecycle, to understand it we first analyze what the volumemanager does:
 			// - when a pod is delete the volumemanager will try to cleanup the volume mounts
 			//   - NodeUnpublishVolume: unbinds the bind mount from the container
-			//     - Linux: the data is flushed to disk
+			//     - Linux: the bind mount is removed, which does not flush any cache
 			//     - Windows: we delete a symlink, data's not flushed yet to disk
 			//   - NodeUnstageVolume: unmount the global mount
-			//     - Linux: disk is detached
+			//     - Linux: disk is unmounted and all caches flushed.
 			//     - Windows: data is flushed to disk and the disk is detached
 			//
 			// Pod deletion might not guarantee a data flush to disk, however NodeUnstageVolume adds the logic
-			// to flush the data to disk (see #81690 for details).
+			// to flush the data to disk (see #81690 for details). We need to wait for NodeUnstageVolume, as
+			// NodeUnpublishVolume only removes the bind mount, which doesn't force the caches to flush.
+			// It's possible to create empty snapshots if we don't wait (see #101279 for details).
 			//
 			// In the following code by checking if the PV is not in the node.Status.VolumesInUse field we
 			// ensure that the volume is not used by the node anymore (an indicator that NodeUnstageVolume has
 			// already finished)
-			if framework.NodeOSDistroIs("windows") {
-				nodeName := pod.Spec.NodeName
-				gomega.Expect(nodeName).NotTo(gomega.BeEmpty(), "pod.Spec.NodeName must not be empty")
+			nodeName := pod.Spec.NodeName
+			gomega.Expect(nodeName).NotTo(gomega.BeEmpty(), "pod.Spec.NodeName must not be empty")
 
-				ginkgo.By(fmt.Sprintf("[init] waiting until the node=%s is not using the volume=%s", nodeName, pv.Name))
-				success := storageutils.WaitUntil(framework.Poll, f.Timeouts.PVDelete, func() bool {
-					node, err := cs.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
-					framework.ExpectNoError(err)
-					volumesInUse := node.Status.VolumesInUse
-					framework.Logf("current volumes in use: %+v", volumesInUse)
-					for i := 0; i < len(volumesInUse); i++ {
-						if strings.HasSuffix(string(volumesInUse[i]), pv.Name) {
-							return false
-						}
+			// Snapshot tests are only executed for CSI drivers. When CSI drivers
+			// are attached to the node they use VolumeHandle instead of the pv.Name.
+			volumeName := pv.Spec.PersistentVolumeSource.CSI.VolumeHandle
+
+			ginkgo.By(fmt.Sprintf("[init] waiting until the node=%s is not using the volume=%s", nodeName, volumeName))
+			success := storageutils.WaitUntil(framework.Poll, f.Timeouts.PVDelete, func() bool {
+				node, err := cs.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
+				framework.ExpectNoError(err)
+				volumesInUse := node.Status.VolumesInUse
+				framework.Logf("current volumes in use: %+v", volumesInUse)
+				for i := 0; i < len(volumesInUse); i++ {
+					if strings.HasSuffix(string(volumesInUse[i]), volumeName) {
+						return false
 					}
-					return true
-				})
-				framework.ExpectEqual(success, true)
-			}
+				}
+				return true
+			})
+			framework.ExpectEqual(success, true)
+
 		}
 
 		cleanup := func() {
@@ -271,7 +278,9 @@ func (s *snapshottableTestSuite) DefineTests(driver storageframework.TestDriver,
 
 				ginkgo.By("modifying the data in the source PVC")
 
-				command := fmt.Sprintf("echo '%s' > %s", modifiedMntTestData, datapath)
+				// After writing data to a file `sync` flushes the data from memory to disk.
+				// sync is available in the Linux and Windows versions of agnhost.
+				command := fmt.Sprintf("echo '%s' > %s; sync", modifiedMntTestData, datapath)
 				RunInPodWithVolume(cs, f.Timeouts, pvc.Namespace, pvc.Name, "pvc-snapshottable-data-tester", command, config.ClientNodeSelection)
 
 				ginkgo.By("creating a pvc from the snapshot")
@@ -312,11 +321,15 @@ func (s *snapshottableTestSuite) DefineTests(driver storageframework.TestDriver,
 
 				ginkgo.By("should delete the VolumeSnapshotContent according to its deletion policy")
 
-				// Delete both Snapshot and PVC at the same time because different storage systems
-				// have different ordering of deletion. Some may require delete PVC first before
+				// Delete both Snapshot and restored Pod/PVC at the same time because different storage systems
+				// have different ordering of deletion. Some may require delete the restored PVC first before
 				// Snapshot deletion and some are opposite.
 				err = storageutils.DeleteSnapshotWithoutWaiting(dc, vs.GetNamespace(), vs.GetName())
 				framework.ExpectNoError(err)
+				framework.Logf("deleting restored pod %q/%q", restoredPod.Namespace, restoredPod.Name)
+				err = cs.CoreV1().Pods(restoredPod.Namespace).Delete(context.TODO(), restoredPod.Name, metav1.DeleteOptions{})
+				framework.ExpectNoError(err)
+				framework.Logf("deleting restored PVC %q/%q", restoredPVC.Namespace, restoredPVC.Name)
 				err = cs.CoreV1().PersistentVolumeClaims(restoredPVC.Namespace).Delete(context.TODO(), restoredPVC.Name, metav1.DeleteOptions{})
 				framework.ExpectNoError(err)
 

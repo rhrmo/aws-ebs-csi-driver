@@ -21,10 +21,10 @@ package driver
 
 import (
 	"fmt"
-	"regexp"
-
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/mounter"
+	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/resizefs"
 	mountutils "k8s.io/mount-utils"
+	"regexp"
 )
 
 func (m NodeMounter) FormatAndMount(source string, target string, fstype string, options []string) error {
@@ -99,8 +99,69 @@ func (m *NodeMounter) PathExists(path string) (bool, error) {
 	return proxyMounter.ExistsPath(path)
 }
 
-func (m *NodeMounter) NeedResize(devicePath string, deviceMountPath string) (bool, error) {
-	// TODO this is called at NodeStage to ensure file system is the correct size
-	// Implement it to respect spec v1.4.0 https://github.com/container-storage-interface/spec/pull/452
+// NeedResize called at NodeStage to ensure file system is the correct size
+func (m *NodeMounter) NeedResize(devicePath, deviceMountPath string) (bool, error) {
+	proxyMounter, ok := m.SafeFormatAndMount.Interface.(*mounter.CSIProxyMounter)
+	if !ok {
+		return false, fmt.Errorf("failed to cast mounter to csi proxy mounter")
+	}
+
+	deviceSize, err := proxyMounter.GetDeviceSize(devicePath)
+	if err != nil {
+		return false, err
+	}
+
+	fsSize, err := proxyMounter.GetVolumeSizeInBytes(deviceMountPath)
+	if err != nil {
+		return false, err
+	}
+	// Tolerate one block difference (4096 bytes)
+	if deviceSize <= DefaultBlockSize+fsSize {
+		return true, nil
+	}
 	return false, nil
+}
+
+// Unmount volume from target path
+func (m *NodeMounter) Unpublish(target string) error {
+	proxyMounter, ok := m.SafeFormatAndMount.Interface.(*mounter.CSIProxyMounter)
+	if !ok {
+		return fmt.Errorf("failed to cast mounter to csi proxy mounter")
+	}
+	// WriteVolumeCache before unmount
+	proxyMounter.WriteVolumeCache(target)
+	// Remove symlink
+	err := proxyMounter.Rmdir(target)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Unmount volume from staging path
+// usually this staging path is a global directory on the node
+func (m *NodeMounter) Unstage(target string) error {
+	proxyMounter, ok := m.SafeFormatAndMount.Interface.(*mounter.CSIProxyMounter)
+	if !ok {
+		return fmt.Errorf("failed to cast mounter to csi proxy mounter")
+	}
+	// Unmounts and offlines the disk via the CSI Proxy API
+	err := proxyMounter.Unmount(target)
+	if err != nil {
+		return err
+	}
+	// Cleanup stage path
+	err = proxyMounter.Rmdir(target)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *NodeMounter) NewResizeFs() (Resizefs, error) {
+	proxyMounter, ok := m.SafeFormatAndMount.Interface.(*mounter.CSIProxyMounter)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast mounter to csi proxy mounter")
+	}
+	return resizefs.NewResizeFs(proxyMounter), nil
 }

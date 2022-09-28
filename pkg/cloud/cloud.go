@@ -35,7 +35,7 @@ import (
 	dm "github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/cloud/devicemanager"
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/util"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // AWS volume types
@@ -52,6 +52,10 @@ const (
 	VolumeTypeSC1 = "sc1"
 	// VolumeTypeST1 represents a throughput-optimized HDD type of volume.
 	VolumeTypeST1 = "st1"
+	// VolumeTypeSBG1 represents a capacity-optimized HDD type of volume. Only for SBE devices.
+	VolumeTypeSBG1 = "sbg1"
+	// VolumeTypeSBP1 represents a performance-optimized SSD type of volume. Only for SBE devices.
+	VolumeTypeSBP1 = "sbp1"
 	// VolumeTypeStandard represents a previous type of  volume.
 	VolumeTypeStandard = "standard"
 )
@@ -65,6 +69,9 @@ const (
 	io2MinTotalIOPS = 100
 	io2MaxTotalIOPS = 64000
 	io2MaxIOPSPerGB = 500
+	gp3MaxTotalIOPS = 16000
+	gp3MinTotalIOPS = 3000
+	gp3MaxIOPSPerGB = 500
 )
 
 var (
@@ -95,10 +102,13 @@ const (
 
 // AWS provisioning limits.
 // Source:
-//   https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html#tag-restrictions
+//
+//	https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html#tag-restrictions
 const (
 	// MaxNumTagsPerResource represents the maximum number of tags per AWS resource.
 	MaxNumTagsPerResource = 50
+	// MinTagKeyLength represents the minimum key length for a tag.
+	MinTagKeyLength = 1
 	// MaxTagKeyLength represents the maximum key length for a tag.
 	MaxTagKeyLength = 128
 	// MaxTagValueLength represents the maximum value length for a tag.
@@ -109,8 +119,6 @@ const (
 const (
 	// DefaultVolumeSize represents the default volume size.
 	DefaultVolumeSize int64 = 100 * util.GiB
-	// DefaultVolumeType specifies which storage to use for newly created Volumes.
-	DefaultVolumeType = VolumeTypeGP3
 )
 
 // Tags
@@ -279,36 +287,57 @@ func newEC2Cloud(region string, awsSdkDebugLog bool) (Cloud, error) {
 
 func (c *cloud) CreateDisk(ctx context.Context, volumeName string, diskOptions *DiskOptions) (*Disk, error) {
 	var (
-		createType string
-		iops       int64
-		throughput int64
-		err        error
+		createType    string
+		iops          int64
+		throughput    int64
+		err           error
+		maxIops       int64
+		minIops       int64
+		maxIopsPerGb  int64
+		requestedIops int64
 	)
+
 	capacityGiB := util.BytesToGiB(diskOptions.CapacityBytes)
 
-	switch diskOptions.VolumeType {
-	case VolumeTypeGP2, VolumeTypeSC1, VolumeTypeST1, VolumeTypeStandard:
-		createType = diskOptions.VolumeType
+	if diskOptions.IOPS > 0 && diskOptions.IOPSPerGB > 0 {
+		return nil, fmt.Errorf("invalid StorageClass parameters; specify either IOPS or IOPSPerGb, not both")
+	}
+
+	createType = diskOptions.VolumeType
+	// If no volume type is specified, GP3 is used as default for newly created volumes.
+	if createType == "" {
+		createType = VolumeTypeGP3
+	}
+
+	switch createType {
+	case VolumeTypeGP2, VolumeTypeSC1, VolumeTypeST1, VolumeTypeSBG1, VolumeTypeSBP1, VolumeTypeStandard:
 	case VolumeTypeIO1:
-		createType = diskOptions.VolumeType
-		iops, err = capIOPS(diskOptions.VolumeType, capacityGiB, int64(diskOptions.IOPSPerGB), io1MinTotalIOPS, io1MaxTotalIOPS, io1MaxIOPSPerGB, diskOptions.AllowIOPSPerGBIncrease)
-		if err != nil {
-			return nil, err
-		}
+		maxIops = io1MaxTotalIOPS
+		minIops = io1MinTotalIOPS
+		maxIopsPerGb = io1MaxIOPSPerGB
 	case VolumeTypeIO2:
-		createType = diskOptions.VolumeType
-		iops, err = capIOPS(diskOptions.VolumeType, capacityGiB, int64(diskOptions.IOPSPerGB), io2MinTotalIOPS, io2MaxTotalIOPS, io2MaxIOPSPerGB, diskOptions.AllowIOPSPerGBIncrease)
-		if err != nil {
-			return nil, err
-		}
+		maxIops = io2MaxTotalIOPS
+		minIops = io2MinTotalIOPS
+		maxIopsPerGb = io2MaxIOPSPerGB
 	case VolumeTypeGP3:
-		createType = diskOptions.VolumeType
-		iops = int64(diskOptions.IOPS)
+		maxIops = gp3MaxTotalIOPS
+		minIops = gp3MinTotalIOPS
+		maxIopsPerGb = gp3MaxIOPSPerGB
 		throughput = int64(diskOptions.Throughput)
-	case "":
-		createType = DefaultVolumeType
 	default:
 		return nil, fmt.Errorf("invalid AWS VolumeType %q", diskOptions.VolumeType)
+	}
+
+	if maxIops > 0 {
+		if diskOptions.IOPS > 0 {
+			requestedIops = int64(diskOptions.IOPS)
+		} else if diskOptions.IOPSPerGB > 0 {
+			requestedIops = int64(diskOptions.IOPSPerGB) * capacityGiB
+		}
+		iops, err = capIOPS(createType, capacityGiB, requestedIops, minIops, maxIops, maxIopsPerGb, diskOptions.AllowIOPSPerGBIncrease)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var tags []*ec2.Tag
@@ -336,12 +365,15 @@ func (c *cloud) CreateDisk(ctx context.Context, volumeName string, diskOptions *
 	clientToken := sha256.Sum256([]byte(volumeName))
 
 	requestInput := &ec2.CreateVolumeInput{
-		AvailabilityZone:  aws.String(zone),
-		ClientToken:       aws.String(hex.EncodeToString(clientToken[:])),
-		Size:              aws.Int64(capacityGiB),
-		VolumeType:        aws.String(createType),
-		TagSpecifications: []*ec2.TagSpecification{&tagSpec},
-		Encrypted:         aws.Bool(diskOptions.Encrypted),
+		AvailabilityZone: aws.String(zone),
+		ClientToken:      aws.String(hex.EncodeToString(clientToken[:])),
+		Size:             aws.Int64(capacityGiB),
+		VolumeType:       aws.String(createType),
+		Encrypted:        aws.Bool(diskOptions.Encrypted),
+	}
+
+	if !util.IsSBE(zone) {
+		requestInput.TagSpecifications = []*ec2.TagSpecification{&tagSpec}
 	}
 
 	// EBS doesn't handle empty outpost arn, so we have to include it only when it's non-empty
@@ -397,7 +429,24 @@ func (c *cloud) CreateDisk(ctx context.Context, volumeName string, diskOptions *
 	}
 
 	outpostArn := aws.StringValue(response.OutpostArn)
-
+	var resources []*string
+	if util.IsSBE(zone) {
+		requestTagsInput := &ec2.CreateTagsInput{
+			Resources: append(resources, &volumeID),
+			Tags:      tags,
+		}
+		_, err := c.ec2.CreateTagsWithContext(ctx, requestTagsInput)
+		if err != nil {
+			// To avoid leaking volume, we should delete the volume just created
+			// TODO: Need to figure out how to handle DeleteDisk failed scenario instead of just log the error
+			if _, error := c.DeleteDisk(ctx, volumeID); error != nil {
+				klog.Errorf("%v failed to be deleted, this may cause volume leak", volumeID)
+			} else {
+				klog.V(5).Infof("[Debug] %v is deleted because there was an error while attaching the tags", volumeID)
+			}
+			return nil, fmt.Errorf("could not attach tags to volume: %v. %v", volumeID, err)
+		}
+	}
 	return &Disk{CapacityGiB: size, VolumeID: volumeID, AvailabilityZone: zone, SnapshotID: snapshotID, OutpostArn: outpostArn}, nil
 }
 
@@ -1202,26 +1251,29 @@ func getVolumeAttachmentsList(volume *ec2.Volume) []string {
 }
 
 // Calculate actual IOPS for a volume and cap it at supported AWS limits.
-// Using requstedIOPSPerGB allows users to create a "fast" storage class
-// (requstedIOPSPerGB = 50 for io1), which can provide the maximum iops
-// that AWS supports for any requestedCapacityGiB.
-func capIOPS(volumeType string, requestedCapacityGiB int64, requstedIOPSPerGB, minTotalIOPS, maxTotalIOPS, maxIOPSPerGB int64, allowIncrease bool) (int64, error) {
-	iops := requestedCapacityGiB * requstedIOPSPerGB
+func capIOPS(volumeType string, requestedCapacityGiB int64, requestedIops int64, minTotalIOPS, maxTotalIOPS, maxIOPSPerGB int64, allowIncrease bool) (int64, error) {
+	// If requestedIops is zero the user did not request a specific amount, and the default will be used instead
+	if requestedIops == 0 {
+		return 0, nil
+	}
+
+	iops := requestedIops
 
 	if iops < minTotalIOPS {
 		if allowIncrease {
 			iops = minTotalIOPS
 			klog.V(5).Infof("[Debug] Increased IOPS for %s %d GB volume to the min supported limit: %d", volumeType, requestedCapacityGiB, iops)
 		} else {
-			return 0, fmt.Errorf("invalid combination of volume size %d GB and iopsPerGB %d: the resulting IOPS %d is too low for AWS, it must be at least %d", requestedCapacityGiB, requstedIOPSPerGB, iops, minTotalIOPS)
+			return 0, fmt.Errorf("invalid IOPS: %d is too low, it must be at least %d", iops, minTotalIOPS)
 		}
 	}
 	if iops > maxTotalIOPS {
 		iops = maxTotalIOPS
 		klog.V(5).Infof("[Debug] Capped IOPS for %s %d GB volume at the max supported limit: %d", volumeType, requestedCapacityGiB, iops)
 	}
-	if iops > maxIOPSPerGB*requestedCapacityGiB {
-		iops = maxIOPSPerGB * requestedCapacityGiB
+	maxIopsByCapacity := maxIOPSPerGB * requestedCapacityGiB
+	if iops > maxIopsByCapacity && maxIopsByCapacity >= minTotalIOPS {
+		iops = maxIopsByCapacity
 		klog.V(5).Infof("[Debug] Capped IOPS for %s %d GB volume at %d IOPS/GB: %d", volumeType, requestedCapacityGiB, maxIOPSPerGB, iops)
 	}
 	return iops, nil
