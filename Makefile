@@ -27,7 +27,7 @@ undefine KUBERNETES_SERVICE_PORT_HTTPS
 # Carry: VERSION is set by CI to go version, not CSI driver version
 undefine VERSION
 
-VERSION?=v1.11.3
+VERSION?=v1.15.0
 
 PKG=github.com/kubernetes-sigs/aws-ebs-csi-driver
 GIT_COMMIT?=$(shell git rev-parse HEAD)
@@ -56,7 +56,7 @@ ALL_OSVERSION_linux?=amazon
 ALL_OS_ARCH_OSVERSION_linux=$(foreach arch, $(ALL_ARCH_linux), $(foreach osversion, ${ALL_OSVERSION_linux}, linux-$(arch)-${osversion}))
 
 ALL_ARCH_windows?=amd64
-ALL_OSVERSION_windows?=1809 20H2 ltsc2019
+ALL_OSVERSION_windows?=20H2 ltsc2019 ltsc2022
 ALL_OS_ARCH_OSVERSION_windows=$(foreach arch, $(ALL_ARCH_windows), $(foreach osversion, ${ALL_OSVERSION_windows}, windows-$(arch)-${osversion}))
 
 ALL_OS_ARCH_OSVERSION=$(foreach os, $(ALL_OS), ${ALL_OS_ARCH_OSVERSION_${os}})
@@ -128,12 +128,12 @@ bin /tmp/helm /tmp/kubeval:
 	@mkdir -p $@
 
 bin/helm: | /tmp/helm bin
-	@curl -o /tmp/helm/helm.tar.gz -sSL https://get.helm.sh/helm-v3.5.3-${GOOS}-amd64.tar.gz
+	@curl -o /tmp/helm/helm.tar.gz -sSL https://get.helm.sh/helm-v3.10.1-${GOOS}-amd64.tar.gz
 	@tar -zxf /tmp/helm/helm.tar.gz -C bin --strip-components=1
 	@rm -rf /tmp/helm/*
 
 bin/kubeval: | /tmp/kubeval bin
-	@curl -o /tmp/kubeval/kubeval.tar.gz -sSL https://github.com/instrumenta/kubeval/releases/download/0.15.0/kubeval-linux-amd64.tar.gz
+	@curl -o /tmp/kubeval/kubeval.tar.gz -sSL https://github.com/instrumenta/kubeval/releases/download/0.16.1/kubeval-linux-amd64.tar.gz
 	@tar -zxf /tmp/kubeval/kubeval.tar.gz -C bin kubeval
 	@rm -rf /tmp/kubeval/*
 
@@ -142,7 +142,7 @@ bin/mockgen: | bin
 
 bin/golangci-lint: | bin
 	echo "Installing golangci-lint..."
-	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v1.21.0
+	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v1.50.1
 
 .PHONY: kubeval
 kubeval: bin/kubeval
@@ -190,15 +190,9 @@ test-e2e-multi-az:
 
 .PHONY: test-e2e-migration
 test-e2e-migration:
-	AWS_REGION=us-west-2 \
-	AWS_AVAILABILITY_ZONES=us-west-2a,us-west-2b,us-west-2c \
-	HELM_EXTRA_FLAGS='--set=controller.k8sTagClusterId=$$CLUSTER_NAME' \
-	EBS_INSTALL_SNAPSHOT="true" \
-	TEST_PATH=./tests/e2e-kubernetes/... \
-	GINKGO_FOCUS="\[ebs-csi-migration\]" \
-	GINKGO_SKIP="\[Disruptive\]|Pre-provisioned" \
-	EBS_CHECK_MIGRATION=true \
-	./hack/e2e/run.sh
+# TODO: Remove once this test is removed from test-infra upstream
+# https://github.com/kubernetes/test-infra/blob/master/config/jobs/kubernetes-sigs/aws-ebs-csi-driver/aws-ebs-csi-driver-presubmits.yaml
+	echo "succeed"
 
 .PHONY: test-e2e-external
 test-e2e-external:
@@ -214,7 +208,6 @@ test-e2e-external:
 .PHONY: test-e2e-external-eks
 test-e2e-external-eks:
 	CLUSTER_TYPE=eksctl \
-	K8S_VERSION="1.20" \
 	HELM_VALUES_FILE="./hack/values_eksctl.yaml" \
 	HELM_EXTRA_FLAGS='--set=controller.k8sTagClusterId=$$CLUSTER_NAME' \
 	EBS_INSTALL_SNAPSHOT="true" \
@@ -224,6 +217,14 @@ test-e2e-external-eks:
 	TEST_PATH=./tests/e2e-kubernetes/... \
 	GINKGO_FOCUS="External.Storage" \
 	GINKGO_SKIP="\[Disruptive\]|\[Serial\]" \
+	./hack/e2e/run.sh
+
+.PHONY: test-helm-chart
+test-helm-chart:
+	AWS_REGION=us-west-2 \
+	AWS_AVAILABILITY_ZONES=us-west-2a,us-west-2b,us-west-2c \
+	EBS_INSTALL_SNAPSHOT="true" \
+	HELM_CT_TEST="true" \
 	./hack/e2e/run.sh
 
 .PHONY: verify-vendor
@@ -251,9 +252,9 @@ generate-kustomize: bin/helm
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/clusterrolebinding-provisioner.yaml > ../../deploy/kubernetes/base/clusterrolebinding-provisioner.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/clusterrolebinding-resizer.yaml > ../../deploy/kubernetes/base/clusterrolebinding-resizer.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/clusterrolebinding-snapshotter.yaml > ../../deploy/kubernetes/base/clusterrolebinding-snapshotter.yaml
-	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/controller.yaml --set "image.repository=k8s.gcr.io/provider-aws/aws-ebs-csi-driver" --api-versions 'snapshot.storage.k8s.io/v1' | sed -e "/namespace: /d" | sed -e "s/:v.*$$//g" > ../../deploy/kubernetes/base/controller.yaml
+	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/controller.yaml --api-versions 'snapshot.storage.k8s.io/v1' | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/controller.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/csidriver.yaml > ../../deploy/kubernetes/base/csidriver.yaml
-	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/node.yaml --set "image.repository=k8s.gcr.io/provider-aws/aws-ebs-csi-driver" | sed -e "/namespace: /d" | sed -e "s/:v.*$$//g" > ../../deploy/kubernetes/base/node.yaml
+	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/node.yaml | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/node.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/poddisruptionbudget-controller.yaml --api-versions 'policy/v1/PodDisruptionBudget' | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/poddisruptionbudget-controller.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/serviceaccount-csi-controller.yaml | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/serviceaccount-csi-controller.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/serviceaccount-csi-node.yaml | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/serviceaccount-csi-node.yaml

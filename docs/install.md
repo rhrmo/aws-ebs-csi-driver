@@ -1,16 +1,18 @@
 # Installation
 
 ## Prerequisites
+
+* Kubernetes Version >= 1.20 
+
+* If you are using a self managed cluster, ensure the flag `--allow-privileged=true` for `kube-apiserver`.
+
+* Important: If you intend to use the csi-snapshotter functionality, the [CSI Snapshotter](https://github.com/kubernetes-csi/external-snapshotter). **must be installed before** the EBS CSI driver.
+
 * If you are managing EBS volumes using static provisioning, get yourself familiar with [EBS volume](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AmazonEBS.html).
-* Get yourself familiar with how to setup Kubernetes on AWS and have a working Kubernetes cluster:
-  * Enable flag `--allow-privileged=true` for `kube-apiserver`
-  * Enable `kube-apiserver` feature gates `--feature-gates=CSINodeInfo=true,CSIDriverRegistry=true,CSIBlockVolume=true,VolumeSnapshotDataSource=true`
-  * Enable `kubelet` feature gates `--feature-gates=CSINodeInfo=true,CSIDriverRegistry=true,CSIBlockVolume=true`
-* If you intend to use the csi-snapshotter functionality you will need to first install the [CSI Snapshotter](https://github.com/kubernetes-csi/external-snapshotter).
 
 ## Installation
 #### Set up driver permission
-The driver requires IAM permission to talk to Amazon EBS to manage the volume on user's behalf. [The example policy here](./example-iam-policy.json) defines these permissions. 
+The driver requires IAM permission to talk to Amazon EBS to manage the volume on user's behalf. [The example policy here](./example-iam-policy.json) defines these permissions. AWS maintains a managed policy, available at ARN `arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy`. 
 
 Note: Add the below statement to the example policy if you want to encrypt the EBS drives. 
 ```
@@ -24,6 +26,8 @@ Note: Add the below statement to the example policy if you want to encrypt the E
   "Resource": "*"
 }
 ```
+
+For more information, review ["Creating the Amazon EBS CSI driver IAM role for service accounts" from the EKS User Guide.](https://docs.aws.amazon.com/eks/latest/userguide/csi-iam-role.html) 
 
 There are several methods to grant the driver IAM permission:
 * Using IAM [instance profile](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2_instance-profiles.html) - attach the policy to the instance profile IAM role and turn on access to [instance metadata](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html) for the instance(s) on which the driver Deployment will run
@@ -44,7 +48,7 @@ Please see the compatibility matrix before you deploy the driver
 
 To deploy the CSI driver:
 ```sh
-kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.11"
+kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.14"
 ```
 
 Verify driver is running:
@@ -66,6 +70,8 @@ helm upgrade --install aws-ebs-csi-driver \
     --namespace kube-system \
     aws-ebs-csi-driver/aws-ebs-csi-driver
 ```
+
+Review the [configuration values](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/blob/master/charts/aws-ebs-csi-driver/values.yaml) for the Helm chart.
 
 #### Upgrading from version 1.X to 2.X of the Helm chart
 Version 2.0.0 removed support for Helm v2 and now requires Helm v3 or above.
@@ -145,8 +151,6 @@ Starting from Kubernetes 1.17, CSI migration is supported as beta feature (alpha
 To make sure dynamically provisioned EBS volumes have all tags that the in-tree volume plugin used:
 * Run the external-provisioner sidecar with `--extra-create-metadata=true` cmdline option. The Helm chart sets this option true by default.
 * Run the CSI driver with `--k8s-tag-cluster-id=<ID of the Kubernetes cluster>` command line option.
-
-To make sure that the CSI driver has permission to Attach, Detach, and Delete volumes that were dynamically provisioned and tagged by the in-tree plugin prior to migration being turned on, the IAM policy has to grant permission to operate on volumes with tag `kubernetes.io/cluster/<ID of the Kubernetes cluster>": "owned"` like in [the example policy](./example-iam-policy.json#L85).
 
 **Warning**:
 * kubelet *must* be drained of all pods with mounted EBS volumes ***before*** changing its CSI migration feature flags.  Failure to do this will cause deleted pods to get stuck in `Terminating`, requiring a forced delete which can cause filesystem corruption. See [#679](../../../issues/679) for more details.

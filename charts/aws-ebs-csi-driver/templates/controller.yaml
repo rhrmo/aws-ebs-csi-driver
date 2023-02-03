@@ -10,7 +10,7 @@ spec:
   replicas: {{ .Values.controller.replicaCount }}
   {{- with .Values.controller.updateStrategy }}
   strategy:
-    {{ toYaml . | nindent 4 }}
+    {{- toYaml . | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:
@@ -41,11 +41,6 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       tolerations:
-        - key: CriticalAddonsOnly
-          operator: Exists
-        - operator: Exists
-          effect: NoExecute
-          tolerationSeconds: 300
         {{- with .Values.controller.tolerations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -59,12 +54,16 @@ spec:
         {{- $constraints | toYaml | nindent 8 }}
       {{- end }}
       {{- with .Values.controller.securityContext }}
-      securityContext:  
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.initContainers }}
+      initContainers:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: ebs-plugin
-          image: {{ printf "%s:%s" .Values.image.repository (default (printf "v%s" .Chart.AppVersion) (.Values.image.tag | toString)) }}
+          image: {{ printf "%s%s:%s" (default "" .Values.image.containerRegistry) .Values.image.repository (default (printf "v%s" .Chart.AppVersion) (.Values.image.tag | toString)) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             {{- if ne .Release.Name "kustomize" }}
@@ -79,9 +78,15 @@ spec:
             {{- with .Values.controller.k8sTagClusterId }}
             - --k8s-tag-cluster-id={{ . }}
             {{- end }}
+            {{- if and (.Values.controller.enableMetrics) (not .Values.controller.httpEndpoint) }}
+            - --http-endpoint=0.0.0.0:3301
+            {{- end}}
             {{- with .Values.controller.httpEndpoint }}
             - --http-endpoint={{ . }}
             {{- end }}
+            {{- if .Values.controller.sdkDebugLog }}
+            - --aws-sdk-debug-log=true
+            {{- end}}
             - --logtostderr
             - --v={{ .Values.controller.logLevel }}
             {{- range .Values.controller.additionalArgs }}
@@ -129,10 +134,18 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy/
+          {{- with .Values.controller.volumeMounts }}
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: healthz
               containerPort: 9808
               protocol: TCP
+            {{- if .Values.controller.enableMetrics }}
+            - name: metrics
+              containerPort: 3301
+              protocol: TCP
+            {{- end}}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -154,11 +167,11 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.controller.containerSecurityContext }}
-          securityContext:  
+          securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         - name: csi-provisioner
-          image: {{ printf "%s:%s" .Values.sidecars.provisioner.image.repository .Values.sidecars.provisioner.image.tag }}
+          image: {{ printf "%s%s:%s" (default "" .Values.image.containerRegistry) .Values.sidecars.provisioner.image.repository .Values.sidecars.provisioner.image.tag }}
           imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.provisioner.image.pullPolicy }}
           args:
             - --csi-address=$(ADDRESS)
@@ -201,11 +214,11 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.sidecars.provisioner.securityContext }}
-          securityContext:  
+          securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         - name: csi-attacher
-          image: {{ printf "%s:%s" .Values.sidecars.attacher.image.repository .Values.sidecars.attacher.image.tag }}
+          image: {{ printf "%s%s:%s" (default "" .Values.image.containerRegistry) .Values.sidecars.attacher.image.repository .Values.sidecars.attacher.image.tag }}
           imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.attacher.image.pullPolicy }}
           args:
             - --csi-address=$(ADDRESS)
@@ -243,12 +256,12 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.sidecars.attacher.securityContext }}
-          securityContext:  
+          securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-        {{- if or (.Capabilities.APIVersions.Has "snapshot.storage.k8s.io/v1beta1") (.Capabilities.APIVersions.Has "snapshot.storage.k8s.io/v1") }}
+        {{- if or .Values.sidecars.snapshotter.forceEnable (.Capabilities.APIVersions.Has "snapshot.storage.k8s.io/v1beta1") (.Capabilities.APIVersions.Has "snapshot.storage.k8s.io/v1") }}
         - name: csi-snapshotter
-          image: {{ printf "%s:%s" .Values.sidecars.snapshotter.image.repository .Values.sidecars.snapshotter.image.tag }}
+          image: {{ printf "%s%s:%s" (default "" .Values.image.containerRegistry) .Values.sidecars.snapshotter.image.repository .Values.sidecars.snapshotter.image.tag }}
           imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.snapshotter.image.pullPolicy }}
           args:
             - --csi-address=$(ADDRESS)
@@ -274,12 +287,12 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.sidecars.snapshotter.securityContext }}
-          securityContext:  
+          securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         {{- end }}
         - name: csi-resizer
-          image: {{ printf "%s:%s" .Values.sidecars.resizer.image.repository .Values.sidecars.resizer.image.tag }}
+          image: {{ printf "%s%s:%s" (default "" .Values.image.containerRegistry) .Values.sidecars.resizer.image.repository .Values.sidecars.resizer.image.tag }}
           imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.resizer.image.pullPolicy }}
           args:
             - --csi-address=$(ADDRESS)
@@ -306,11 +319,11 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.sidecars.resizer.securityContext }}
-          securityContext:  
+          securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         - name: liveness-probe
-          image: {{ printf "%s:%s" .Values.sidecars.livenessProbe.image.repository .Values.sidecars.livenessProbe.image.tag }}
+          image: {{ printf "%s%s:%s" (default "" .Values.image.containerRegistry) .Values.sidecars.livenessProbe.image.repository .Values.sidecars.livenessProbe.image.tag }}
           imagePullPolicy: {{ default .Values.image.pullPolicy .Values.sidecars.livenessProbe.image.pullPolicy }}
           args:
             - --csi-address=/csi/csi.sock
@@ -326,7 +339,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.sidecars.livenessProbe.securityContext }}
-          securityContext:  
+          securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- if .Values.imagePullSecrets }}
@@ -338,3 +351,6 @@ spec:
       volumes:
         - name: socket-dir
           emptyDir: {}
+        {{- with .Values.controller.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

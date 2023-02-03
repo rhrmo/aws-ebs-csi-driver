@@ -1,3 +1,85 @@
+# v1.14.1
+### Bug Fixes
+* (Cherry-Pick) Fixed handling of volume limits for instance types m6id and x2idn
+
+# v1.14.0
+### Improvements
+* Bumped golang dependencies
+* Rebuilt driver container with newer base image (containing security fixes)
+* In the next minor release (v1.15.0, scheduled for January) the default sidecars will be changed, see https://github.com/kubernetes-sigs/aws-ebs-csi-driver/issues/1456
+
+# v1.13.0
+### Bug Fixes
+
+* Add version information from tag to GCR build ([#1426](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1426), [@ConnorJC3](https://github.com/ConnorJC3))
+* `pkg/driver/controller.go` uses ToLower ([#1429](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1429), [@yevhenvolchenko](https://github.com/yevhenvolchenko))
+* Increase cloudbuild timeout ([#1430](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1430), [@torredil](https://github.com/torredil))
+* Use `PULL_BASE_REF` for `VERSION` instead of `GIT_TAG` for GCR builds ([#1439](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1439), [@ConnorJC3](https://github.com/ConnorJC3))
+* Grab version via tag directly from git ([#1441](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1441), [@ConnorJC3](https://github.com/ConnorJC3))
+
+### Improvements
+* Upgrade K8s to `v1.25`; Upgrade ginkgo to `v2`; Use upstream binary for `e2e-kubernetes` ([#1341](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1341), [@torredil](https://github.com/torredil))
+* Add release and support policy to README.md ([#1392](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1392), [@torredil](https://github.com/torredil))
+* Update and run update-gomock ([#1422](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1422), [@torredil](https://github.com/torredil))
+* Upgrade Go/CI dependencies ([#1433](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1433), [@torredil](https://github.com/torredil))
+* Upgrade golangci-lint; Fix linter errors ([#1435](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1435), [@torredil](https://github.com/torredil))
+
+### Acknowledgments
+* We would like to sincerely thank:
+[@yevhenvolchenko](https://github.com/yevhenvolchenko)
+
+# v1.12.1
+### Security
+* Addreses [ALAS2-2022-1854](https://alas.aws.amazon.com/AL2/ALAS-2022-1854.html) and [ALAS2-2022-1849](https://alas.aws.amazon.com/AL2/ALAS-2022-1849.html)
+
+# v1.11.5
+### Backported Security
+* Addreses [ALAS2-2022-1854](https://alas.aws.amazon.com/AL2/ALAS-2022-1854.html) and [ALAS2-2022-1849](https://alas.aws.amazon.com/AL2/ALAS-2022-1849.html)
+
+# v1.12.0
+### Notable Changes
+* Unify IOPS handling across volume types ([#1366](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1366), [@torredil](https://github.com/torredil))
+* Change fsGroupPolicy to File ([#1377](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1377), [@ConnorJC3](https://github.com/ConnorJC3))
+* Add resolver to handle custom endpoints ([#1398](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1398), [@bertinatto](https://github.com/bertinatto))
+* Add enableMetrics configuration ([#1380](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1380), [@torredil](https://github.com/torredil))
+* Build Windows container for Windows Server 2022 LTSC ([#1408](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1408), [@ConnorJC3](https://github.com/ConnorJC3))
+* Add support for io2 Block Express volumes ([#1409](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1409), [@ConnorJC3](https://github.com/ConnorJC3))
+
+### Bug Fixes
+* c6i.metal and g5g.metal are nitro instances ([#1358](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1358), [@wmesard](https://github.com/wmesard))
+* Update release notes; Implement useOldCSIDriver parameter ([#1391](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1391), [@ConnorJC3](https://github.com/ConnorJC3))
+
+### Improvements
+* Add controller nodeAffinity to prefer EC2 over Fargate ([#1360](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1360), [@torredil](https://github.com/torredil))
+* Add warning message when region is unavailable on the controller ([#1359](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1359), [@ConnorJC3](https://github.com/ConnorJC3))
+* Retrieve region/AZ from topology label ([#1360](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1360), [@torredil](https://github.com/torredil))
+* Update the kustomization deployment to latest image tag ([#1367](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1367), [@gtxu](https://github.com/gtxu))
+* Update module k8s.io/klog to v2 ([#1370](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1370), [@torredil](https://github.com/torredil))
+* Updating static example to include setting fsType ([#1376](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1376), [@jbehrends](https://github.com/jbehrends))
+* Allow all taint for csi-node by default ([#1381](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1381), [@gtxu](https://github.com/gtxu))
+* add link to install guide ([#1383](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1383), [@geoffcline](https://github.com/geoffcline))
+* Add self to OWNERS ([#1399](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1399), [@ConnorJC3](https://github.com/ConnorJC3))
+* Cleanup OWNERS ([#1403](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1403), [@ConnorJC3](https://github.com/ConnorJC3))
+* Add snow device types to parameters ([#1404](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1404), [@TerryHowe](https://github.com/TerryHowe))
+* revise preqs for install docs ([#1389](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1389), [@geoffcline](https://github.com/geoffcline))
+* Update workflows ([#1401](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1401), [@torredil](https://github.com/torredil))
+* Add .image-* files from Makefile to .gitignore ([#1410](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1410), [@ConnorJC3](https://github.com/ConnorJC3))
+* Update trivy.yaml workflow event trigger ([#1411](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1411), [@torredil](https://github.com/torredil))
+
+### Acknowledgments
+* We would like to sincerely thank:
+[@TerryHowe](https://github.com/TerryHowe), [@bertinatto](https://github.com/bertinatto), [@geoffcline](https://github.com/geoffcline), & [@jbehrends](https://github.com/jbehrends)
+
+# v1.11.4
+### Improvements
+* Update go version; Update dependencies ([#1394](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1394), [@torredil](https://github.com/torredil))
+    - go `1.17` -> `1.19`
+    - github.com/aws/aws-sdk-go `v1.44.45` -> `v1.44.101`
+    - github.com/google/go-cmp `v0.5.8` -> `v0.5.9`
+    - github.com/onsi/gomega `v1.19.0` -> `v1.20.2`
+    - golang.org/x/sys `v0.0.0-20220728004956-3c1f35247d10` -> `v0.0.0-20220919091848-fb04ddd9f9c8`
+    - google.golang.org/grpc `v1.47.0` -> `v1.49.0`
+
 # v1.11.3
 ### Vulnerability Fixes
 * Address CVEs ([#1384](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1384), [@torredil](https://github.com/torredil))

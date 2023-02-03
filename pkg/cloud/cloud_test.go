@@ -497,6 +497,26 @@ func TestCreateDisk(t *testing.T) {
 			expErr: nil,
 		},
 		{
+			name:       "success: large io2 Block Express with too high iopsPerGB",
+			volumeName: "vol-test-name",
+			diskOptions: &DiskOptions{
+				CapacityBytes: util.GiBToBytes(3333),
+				Tags:          map[string]string{VolumeNameTagKey: "vol-test", AwsEbsDriverTagKey: "true"},
+				VolumeType:    VolumeTypeIO2,
+				IOPSPerGB:     100000,
+				BlockExpress:  true,
+			},
+			expDisk: &Disk{
+				VolumeID:         "vol-test",
+				CapacityGiB:      3333,
+				AvailabilityZone: defaultZone,
+			},
+			expCreateVolumeInput: &ec2.CreateVolumeInput{
+				Iops: aws.Int64(256000),
+			},
+			expErr: nil,
+		},
+		{
 			name:       "success: create volume when zone is snow and add tags",
 			volumeName: "vol-test-name",
 			diskOptions: &DiskOptions{
@@ -1562,8 +1582,9 @@ func TestListSnapshots(t *testing.T) {
 
 				mockEC2.EXPECT().DescribeSnapshotsWithContext(gomock.Eq(ctx), gomock.Any()).Return(&ec2.DescribeSnapshotsOutput{}, nil)
 
-				if _, err := c.ListSnapshots(ctx, "", 0, ""); err != nil {
-					if err != ErrNotFound {
+				_, err := c.ListSnapshots(ctx, "", 0, "")
+				if err != nil {
+					if !errors.Is(err, ErrNotFound) {
 						t.Fatalf("Expected error %v, got %v", ErrNotFound, err)
 					}
 				} else {

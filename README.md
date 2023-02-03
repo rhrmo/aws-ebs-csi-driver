@@ -16,17 +16,24 @@ The [Amazon Elastic Block Store](https://aws.amazon.com/ebs/) Container Storage 
 * **Volume Snapshots** - Create and restore [snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) taken from a volume in Kubernetes.
 * **Volume Resizing** - Expand the volume size by specifying a new size in the [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#PersistentVolumeClaim:~:text=PersistentVolumeClaim%20(PVC)) (PVC).
 
-## Container Images:
+## Container Images
 
 |Driver Version | [GCR](https://us.gcr.io/k8s-artifacts-prod/provider-aws/aws-ebs-csi-driver ) Image | [ECR](https://gallery.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver) Image |
 |---------------------------|--------------------------------------------------|-----------------------------------------------------------------------------|
-|v1.11.3                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.11.3| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.11.3                    |
+|v1.14.1                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.14.1| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.14.1                    |
 
 <details>
 <summary>Previous Images</summary>
 
 |Driver Version | [GCR](https://us.gcr.io/k8s-artifacts-prod/provider-aws/aws-ebs-csi-driver ) Image | [ECR](https://gallery.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver) Image |
 |---------------------------|--------------------------------------------------|-----------------------------------------------------------------------------|
+|v1.14.0                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.14.0| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.14.0                    |
+|v1.13.0                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.13.0| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.13.0                    |
+|v1.12.1                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.12.1| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.12.1                    |
+|v1.12.0                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.12.0| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.12.0                    |
+|v1.11.5                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.11.5| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.11.5                    |
+|v1.11.4                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.11.4| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.11.4                    |
+|v1.11.3                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.11.3| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.11.3                    |
 |v1.11.2                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.11.2| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.11.2                    |
 |v1.10.0                    |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.10.0| public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.10.0                    |
 |v1.9.0                     |k8s.gcr.io/provider-aws/aws-ebs-csi-driver:v1.9.0 | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.9.0                     |
@@ -66,25 +73,29 @@ The [Amazon Elastic Block Store](https://aws.amazon.com/ebs/) Container Storage 
 **Note**: If your cluster isn't in the `us-west-2` Region, please change `602401143452.dkr.ecr.us-west-2.amazonaws.com` to the [address](https://github.com/awsdocs/amazon-eks-user-guide/blob/master/doc_source/add-ons-images.md) that corresponds to your Region.
 </details>
 
-## Kubernetes Compatibility Matrix
+## Releases
 
-| AWS EBS CSI Driver / Kubernetes Version| v1.12 | v1.13 | v1.14 | v1.15 | v1.16 | v1.17 | v1.18+|
-|----------------------------------------|-------|-------|-------|-------|-------|-------|-------|
-| master branch                          | no    | no    | no    | no    | no    | yes   | yes   |
-| v0.9.x-v1.11.x                          | no    | no    | no    | no    | no    | yes   | yes   |
-| v0.5.0-v0.8.x                          | no    | no    | yes   | yes   | yes   | yes   | yes   |
-| v0.4.0                                 | no    | no    | yes   | yes   | no    | no    | no    |
-| v0.3.0                                 | no    | no    | yes   | no    | no    | no    | no    |
-| v0.2.0                                 | no    | yes   | yes   | no    | no    | no    | no    |
-| v0.1.0                                 | yes   | yes   | yes   | no    | no    | no    | no    |
- 
-## CSI Specification Compatibility Matrix
-| AWS EBS CSI Driver / CSI Version       | v0.3.0| v1.0.0 | v1.1.0 |
-|----------------------------------------|-------|--------|--------|
-| master branch                          | no    | no     | yes    |
-| v0.4.0-v1.11.x                          | no    | no     | yes    |
-| v0.2.0-v0.3.0                          | no    | yes    | no     |
-| v0.1.0                                 | yes   | no     | no     |
+The EBS CSI Driver publishes monthly releases. Unscheduled releases may be published for patches to security vulnerabilities and other fixes deemed urgent.
+
+The EBS CSI Driver follows [semantic versioning](https://semver.org/). The version will be bumped following the rules below:
+
+* Significant breaking changes will be released as a `MAJOR` update.
+* New features will be released as a `MINOR` update.
+* Bug or vulnerability fixes will be released as a `PATCH` update.
+
+Monthly releases will contain at minimum a `MINOR` version bump, even if the content would normally be treated as a `PATCH` version.
+
+## Support
+
+EBS CSI Driver container images are officially hosted in [ECR](https://gallery.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver) and [GCR](https://us.gcr.io/k8s-artifacts-prod/provider-aws/aws-ebs-csi-driver).
+
+Support will be provided for the latest version and one prior version. Bugs or vulnerabilities found in the latest version will be backported to the previous release in a new minor version.
+
+This policy is non-binding and subject to change.
+
+## Compatibility
+
+The EBS CSI Driver is compatible with Kubernetes versions v1.17+ and implements the CSI Specification v1.1.0.
 
 ## Documentation
 
