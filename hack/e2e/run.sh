@@ -26,7 +26,6 @@ source "${BASE_DIR}"/chart-testing.sh
 
 DRIVER_NAME=${DRIVER_NAME:-aws-ebs-csi-driver}
 CONTAINER_NAME=${CONTAINER_NAME:-ebs-plugin}
-DRIVER_START_TIME_THRESHOLD_SECONDS=60
 
 TEST_ID=${TEST_ID:-$RANDOM}
 CLUSTER_NAME=test-cluster-${TEST_ID}.k8s.local
@@ -34,7 +33,6 @@ CLUSTER_TYPE=${CLUSTER_TYPE:-kops}
 
 TEST_DIR=${BASE_DIR}/csi-test-artifacts
 BIN_DIR=${TEST_DIR}/bin
-SSH_KEY_PATH=${TEST_DIR}/id_rsa
 CLUSTER_FILE=${TEST_DIR}/${CLUSTER_NAME}.${CLUSTER_TYPE}.yaml
 KUBECONFIG=${KUBECONFIG:-"${TEST_DIR}/${CLUSTER_NAME}.${CLUSTER_TYPE}.kubeconfig"}
 
@@ -50,16 +48,17 @@ IMAGE_TAG=${IMAGE_TAG:-${TEST_ID}}
 
 # kops: must include patch version (e.g. 1.19.1)
 # eksctl: mustn't include patch version (e.g. 1.19)
-K8S_VERSION_KOPS=${K8S_VERSION_KOPS:-${K8S_VERSION:-1.25.2}}
-K8S_VERSION_EKSCTL=${K8S_VERSION_EKSCTL:-${K8S_VERSION:-1.23}}
+K8S_VERSION_KOPS=${K8S_VERSION_KOPS:-${K8S_VERSION:-1.26.2}}
+K8S_VERSION_EKSCTL=${K8S_VERSION_EKSCTL:-${K8S_VERSION:-1.25}}
 
-KOPS_VERSION=${KOPS_VERSION:-1.25.2}
+KOPS_VERSION=${KOPS_VERSION:-1.26.2}
 KOPS_STATE_FILE=${KOPS_STATE_FILE:-s3://k8s-kops-csi-e2e}
 KOPS_PATCH_FILE=${KOPS_PATCH_FILE:-./hack/kops-patch.yaml}
 KOPS_PATCH_NODE_FILE=${KOPS_PATCH_NODE_FILE:-./hack/kops-patch-node.yaml}
 
-EKSCTL_VERSION=${EKSCTL_VERSION:-0.115.0}
+EKSCTL_VERSION=${EKSCTL_VERSION:-0.133.0}
 EKSCTL_PATCH_FILE=${EKSCTL_PATCH_FILE:-./hack/eksctl-patch.yaml}
+VPC_CONFIGMAP_FILE=${VPC_CONFIGMAP_FILE:-./hack/vpc-resource-controller-configmap.yaml}
 EKSCTL_ADMIN_ROLE=${EKSCTL_ADMIN_ROLE:-}
 # Creates a windows node group.
 WINDOWS=${WINDOWS:-"false"}
@@ -72,10 +71,12 @@ ARTIFACTS=${ARTIFACTS:-"${TEST_DIR}/artifacts"}
 GINKGO_FOCUS=${GINKGO_FOCUS:-"\[ebs-csi-e2e\]"}
 GINKGO_SKIP=${GINKGO_SKIP:-"\[Disruptive\]"}
 GINKGO_NODES=${GINKGO_NODES:-4}
+GINKGO_PARALLEL=${GINKGO_PARALLEL:-25}
+NODE_OS_DISTRO=${NODE_OS_DISTRO:-"linux"}
 TEST_EXTRA_FLAGS=${TEST_EXTRA_FLAGS:-}
 
 EBS_INSTALL_SNAPSHOT=${EBS_INSTALL_SNAPSHOT:-"false"}
-EBS_INSTALL_SNAPSHOT_VERSION=${EBS_INSTALL_SNAPSHOT_VERSION:-"v6.1.0"}
+EBS_INSTALL_SNAPSHOT_VERSION=${EBS_INSTALL_SNAPSHOT_VERSION:-"v6.2.1"}
 
 HELM_CT_TEST=${HELM_CT_TEST:-"false"}
 CHART_TESTING_VERSION=${CHART_TESTING_VERSION:-3.7.1}
@@ -111,7 +112,7 @@ else
   GINKGO_BIN=${BIN_DIR}/ginkgo
   if [[ ! -e ${GINKGO_BIN} ]]; then
     pushd /tmp
-    GOPATH=${TEST_DIR} GOBIN=${BIN_DIR} go install github.com/onsi/ginkgo/v2/ginkgo@v2.2.0
+    GOPATH=${TEST_DIR} GOBIN=${BIN_DIR} go install github.com/onsi/ginkgo/v2/ginkgo@v2.9.0
     popd
     ginkgo version
   fi
@@ -122,16 +123,15 @@ else
     GOPATH=${TEST_DIR} GOBIN=${BIN_DIR} go install sigs.k8s.io/kubetest2/...@latest
     popd
   fi
-
-  ecr_build_and_push "${REGION}" \
-    "${AWS_ACCOUNT_ID}" \
-    "${IMAGE_NAME}" \
-    "${IMAGE_TAG}"
 fi
+
+ecr_build_and_push "${REGION}" \
+  "${AWS_ACCOUNT_ID}" \
+  "${IMAGE_NAME}" \
+  "${IMAGE_TAG}"
 
 if [[ "${CLUSTER_TYPE}" == "kops" ]]; then
   kops_create_cluster \
-    "$SSH_KEY_PATH" \
     "$CLUSTER_NAME" \
     "$KOPS_BIN" \
     "$ZONES" \
@@ -148,7 +148,6 @@ if [[ "${CLUSTER_TYPE}" == "kops" ]]; then
   fi
 elif [[ "${CLUSTER_TYPE}" == "eksctl" ]]; then
   eksctl_create_cluster \
-    "$SSH_KEY_PATH" \
     "$CLUSTER_NAME" \
     "$EKSCTL_BIN" \
     "$ZONES" \
@@ -158,7 +157,8 @@ elif [[ "${CLUSTER_TYPE}" == "eksctl" ]]; then
     "$KUBECONFIG" \
     "$EKSCTL_PATCH_FILE" \
     "$EKSCTL_ADMIN_ROLE" \
-    "$WINDOWS"
+    "$WINDOWS" \
+    "$VPC_CONFIGMAP_FILE"
   if [[ $? -ne 0 ]]; then
     exit 1
   fi
@@ -186,7 +186,7 @@ if [[ "${HELM_CT_TEST}" == true ]]; then
   set -x
   set +e
   export KUBECONFIG="${KUBECONFIG}"
-  ${CHART_TESTING_BIN} lint-and-install --config ${PWD}/tests/ct-config.yaml
+  ${CHART_TESTING_BIN} lint-and-install --config ${PWD}/tests/ct-config.yaml --helm-extra-set-args="--set=image.repository=${IMAGE_NAME},image.tag=${IMAGE_TAG}"
   TEST_PASSED=$?
   set -e
   set +x
@@ -198,6 +198,8 @@ else
     --namespace kube-system
     --set image.repository="${IMAGE_NAME}"
     --set image.tag="${IMAGE_TAG}"
+    --set node.enableWindows="${WINDOWS}"
+    --timeout 10m0s
     --wait
     --kubeconfig "${KUBECONFIG}"
     ./charts/"${DRIVER_NAME}")
@@ -214,13 +216,7 @@ else
 
   endSec=$(date +'%s')
   secondUsed=$(((endSec - startSec) / 1))
-  # Set timeout threshold as 20 seconds for now, usually it takes less than 10s to startup
-  if [ $secondUsed -gt $DRIVER_START_TIME_THRESHOLD_SECONDS ]; then
-    loudecho "Driver start timeout, took $secondUsed but the threshold is $DRIVER_START_TIME_THRESHOLD_SECONDS. Fail the test."
-    exit 1
-  fi
   loudecho "Driver deployment complete, time used: $secondUsed seconds"
-
   loudecho "Testing focus ${GINKGO_FOCUS}"
 
   if [[ $TEST_PATH == "./tests/e2e-kubernetes/..." ]]; then
@@ -236,8 +232,8 @@ else
       --skip-regex="${GINKGO_SKIP}" \
       --focus-regex="${GINKGO_FOCUS}" \
       --test-package-version=$(curl https://storage.googleapis.com/kubernetes-release/release/stable-$packageVersion.txt) \
-      --parallel=25 \
-      --test-args="-storage.testdriver=${PWD}/manifests.yaml -kubeconfig=$KUBECONFIG"
+      --parallel=${GINKGO_PARALLEL} \
+      --test-args="-storage.testdriver=${PWD}/manifests.yaml -kubeconfig=$KUBECONFIG -node-os-distro=${NODE_OS_DISTRO}"
 
     TEST_PASSED=$?
     set -e

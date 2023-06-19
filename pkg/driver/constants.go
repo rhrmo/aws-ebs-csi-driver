@@ -69,6 +69,16 @@ const (
 	// provisioned volume
 	PVNameKey = "csi.storage.k8s.io/pv/name"
 
+	// VolumeSnapshotNameKey contains name of the snapshot
+	VolumeSnapshotNameKey = "csi.storage.k8s.io/volumesnapshot/name"
+
+	// VolumeSnapshotNamespaceKey contains namespace of the snapshot
+	VolumeSnapshotNamespaceKey = "csi.storage.k8s.io/volumesnapshot/namespace"
+
+	// VolumeSnapshotCotentNameKey contains name of the VolumeSnapshotContent that is the source
+	// for the snapshot
+	VolumeSnapshotContentNameKey = "csi.storage.k8s.io/volumesnapshotcontent/name"
+
 	// BlockExpressKey increases the iops limit for io2 volumes to the block express limit
 	BlockExpressKey = "blockexpress"
 
@@ -78,6 +88,12 @@ const (
 	// TagKeyPrefix contains the prefix of a volume parameter that designates it as
 	// a tag to be attached to the resource
 	TagKeyPrefix = "tagSpecification"
+)
+
+// constants of keys in snapshot parameters
+const (
+	// FastSnapShotRestoreAvailabilityZones represents key for fast snapshot restore availability zones
+	FastSnapshotRestoreAvailabilityZones = "fastsnapshotrestoreavailabilityzones"
 )
 
 // constants for volume tags and their values

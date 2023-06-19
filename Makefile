@@ -27,7 +27,7 @@ undefine KUBERNETES_SERVICE_PORT_HTTPS
 # Carry: VERSION is set by CI to go version, not CSI driver version
 undefine VERSION
 
-VERSION?=v1.15.0
+VERSION?=v1.18.0
 
 PKG=github.com/kubernetes-sigs/aws-ebs-csi-driver
 GIT_COMMIT?=$(shell git rev-parse HEAD)
@@ -117,6 +117,7 @@ image: .image-$(TAG)-$(OS)-$(ARCH)-$(OSVERSION)
 		-t=$(IMAGE):$(TAG)-$(OS)-$(ARCH)-$(OSVERSION) \
 		--build-arg=GOPROXY=$(GOPROXY) \
 		--build-arg=VERSION=$(VERSION) \
+		`./hack/provenance` \
 		.
 	touch $@
 
@@ -128,7 +129,7 @@ bin /tmp/helm /tmp/kubeval:
 	@mkdir -p $@
 
 bin/helm: | /tmp/helm bin
-	@curl -o /tmp/helm/helm.tar.gz -sSL https://get.helm.sh/helm-v3.10.1-${GOOS}-amd64.tar.gz
+	@curl -o /tmp/helm/helm.tar.gz -sSL https://get.helm.sh/helm-v3.11.2-${GOOS}-amd64.tar.gz
 	@tar -zxf /tmp/helm/helm.tar.gz -C bin --strip-components=1
 	@rm -rf /tmp/helm/*
 
@@ -138,11 +139,11 @@ bin/kubeval: | /tmp/kubeval bin
 	@rm -rf /tmp/kubeval/*
 
 bin/mockgen: | bin
-	go install github.com/golang/mock/mockgen@v1.5.0
+	go install github.com/golang/mock/mockgen@v1.6.0
 
 bin/golangci-lint: | bin
 	echo "Installing golangci-lint..."
-	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v1.51.1
+	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v1.51.2
 
 .PHONY: kubeval
 kubeval: bin/kubeval
@@ -188,12 +189,6 @@ test-e2e-multi-az:
 	GINKGO_FOCUS="\[ebs-csi-e2e\] \[multi-az\]" \
 	./hack/e2e/run.sh
 
-.PHONY: test-e2e-migration
-test-e2e-migration:
-# TODO: Remove once this test is removed from test-infra upstream
-# https://github.com/kubernetes/test-infra/blob/master/config/jobs/kubernetes-sigs/aws-ebs-csi-driver/aws-ebs-csi-driver-presubmits.yaml
-	echo "succeed"
-
 .PHONY: test-e2e-external
 test-e2e-external:
 	AWS_REGION=us-west-2 \
@@ -217,6 +212,22 @@ test-e2e-external-eks:
 	TEST_PATH=./tests/e2e-kubernetes/... \
 	GINKGO_FOCUS="External.Storage" \
 	GINKGO_SKIP="\[Disruptive\]|\[Serial\]" \
+	./hack/e2e/run.sh
+
+.PHONY: test-e2e-external-eks-windows
+test-e2e-external-eks-windows:
+	CLUSTER_TYPE=eksctl \
+	WINDOWS=true \
+	HELM_VALUES_FILE="./hack/values_eksctl.yaml" \
+	HELM_EXTRA_FLAGS='--set=controller.k8sTagClusterId=$$CLUSTER_NAME' \
+	EKSCTL_ADMIN_ROLE="Infra-prod-KopsDeleteAllLambdaServiceRoleF1578477-1ELDFIB4KCMXV" \
+	AWS_REGION=us-west-2 \
+	AWS_AVAILABILITY_ZONES=us-west-2a,us-west-2b \
+	TEST_PATH=./tests/e2e-kubernetes/... \
+	GINKGO_FOCUS="External.Storage" \
+	GINKGO_SKIP="\[Disruptive\]|\[Serial\]|\[LinuxOnly\]|\[Feature:VolumeSnapshotDataSource\]|\(xfs\)|\(ext4\)|\(block volmode\)" \
+	GINKGO_PARALLEL=15 \
+	NODE_OS_DISTRO="windows" \
 	./hack/e2e/run.sh
 
 .PHONY: test-helm-chart

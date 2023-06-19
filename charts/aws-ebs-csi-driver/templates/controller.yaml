@@ -87,7 +87,9 @@ spec:
             {{- if .Values.controller.sdkDebugLog }}
             - --aws-sdk-debug-log=true
             {{- end}}
-            - --logtostderr
+            {{- with .Values.controller.loggingFormat }}
+            - --logging-format={{ . }}
+            {{- end }}
             - --v={{ .Values.controller.logLevel }}
             {{- range .Values.controller.additionalArgs }}
             - {{ . }}
@@ -266,6 +268,9 @@ spec:
           args:
             - --csi-address=$(ADDRESS)
             - --leader-election=true
+            {{- if .Values.controller.extraCreateMetadata }}
+            - --extra-create-metadata
+            {{- end}}
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock

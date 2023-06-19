@@ -17,11 +17,12 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"os"
 	"reflect"
 	"strconv"
 	"testing"
+
+	flag "github.com/spf13/pflag"
 
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/driver"
 )
@@ -56,20 +57,19 @@ func TestGetOptions(t *testing.T) {
 		}, additionalArgs...)
 
 		if withServerOptions {
-			args = append(args, "-"+endpointFlagName+"="+endpoint)
+			args = append(args, "--"+endpointFlagName+"="+endpoint)
 		}
 		if withControllerOptions {
-			args = append(args, "-"+extraTagsFlagName+"="+extraTagKey+"="+extraTagValue)
-			args = append(args, "-"+awsSdkDebugFlagName+"="+strconv.FormatBool(awsSdkDebugFlagValue))
+			args = append(args, "--"+extraTagsFlagName+"="+extraTagKey+"="+extraTagValue)
+			args = append(args, "--"+awsSdkDebugFlagName+"="+strconv.FormatBool(awsSdkDebugFlagValue))
 		}
 		if withNodeOptions {
-			args = append(args, "-"+VolumeAttachLimitFlagName+"="+strconv.FormatInt(VolumeAttachLimit, 10))
+			args = append(args, "--"+VolumeAttachLimitFlagName+"="+strconv.FormatInt(VolumeAttachLimit, 10))
 		}
 
 		oldArgs := os.Args
 		defer func() { os.Args = oldArgs }()
 		os.Args = args
-
 		options := GetOptions(flagSet)
 
 		if withServerOptions {
@@ -163,8 +163,10 @@ func TestGetOptions(t *testing.T) {
 				defer func() { osExit = oldOSExit }()
 
 				var exitCode int
+				calledExit := false
 				testExit := func(code int) {
 					exitCode = code
+					calledExit = true
 				}
 				osExit = testExit
 
@@ -172,7 +174,7 @@ func TestGetOptions(t *testing.T) {
 				defer func() { os.Args = oldArgs }()
 				os.Args = []string{
 					"aws-ebs-csi-driver",
-					"-version",
+					"--version",
 				}
 
 				flagSet := flag.NewFlagSet("test-flagset", flag.ContinueOnError)
@@ -180,6 +182,9 @@ func TestGetOptions(t *testing.T) {
 
 				if exitCode != 0 {
 					t.Fatalf("expected exit code 0 but got %d", exitCode)
+				}
+				if !calledExit {
+					t.Fatalf("expect osExit to be called, but wasn't")
 				}
 			},
 		},

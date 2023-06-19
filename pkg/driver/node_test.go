@@ -1941,7 +1941,7 @@ func TestNodeGetInfo(t *testing.T) {
 			availabilityZone:  "us-west-2b",
 			region:            "us-west-2",
 			volumeAttachLimit: -1,
-			expMaxVolumes:     39,
+			expMaxVolumes:     38,
 			attachedENIs:      1,
 			outpostArn:        emptyOutpostArn,
 		},
@@ -1963,7 +1963,7 @@ func TestNodeGetInfo(t *testing.T) {
 			region:            "us-west-2",
 			volumeAttachLimit: -1,
 			attachedENIs:      2,
-			expMaxVolumes:     26, // 28 (max) - 2 (enis)
+			expMaxVolumes:     25, // 28 (max) - 2 (enis) - 1 (root)
 			outpostArn:        emptyOutpostArn,
 		},
 		{
@@ -1974,7 +1974,7 @@ func TestNodeGetInfo(t *testing.T) {
 			region:            "us-west-2",
 			volumeAttachLimit: -1,
 			attachedENIs:      2,
-			expMaxVolumes:     25,
+			expMaxVolumes:     24,
 			outpostArn:        emptyOutpostArn,
 		},
 		{
@@ -2005,7 +2005,7 @@ func TestNodeGetInfo(t *testing.T) {
 			region:            "us-west-2",
 			volumeAttachLimit: -1,
 			attachedENIs:      1,
-			expMaxVolumes:     27, // 28 (max) - 1 (eni)
+			expMaxVolumes:     26, // 28 (max) - 1 (eni) - 1 (root)
 			outpostArn:        emptyOutpostArn,
 		},
 		{
@@ -2050,7 +2050,43 @@ func TestNodeGetInfo(t *testing.T) {
 			volumeAttachLimit: -1,
 			attachedENIs:      1,
 			blockDevices:      2,
-			expMaxVolumes:     25,
+			expMaxVolumes:     24,
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "nitro instance already attached max EBS volumes",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "t3.xlarge",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      1,
+			blockDevices:      27,
+			expMaxVolumes:     0,
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "non-nitro instance already attached max EBS volumes",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "m5.xlarge",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      1,
+			blockDevices:      39,
+			expMaxVolumes:     0,
+			outpostArn:        emptyOutpostArn,
+		},
+		{
+			name:              "nitro instance already attached max ENIs",
+			instanceID:        "i-123456789abcdef01",
+			instanceType:      "t3.xlarge",
+			availabilityZone:  "us-west-2b",
+			region:            "us-west-2",
+			volumeAttachLimit: -1,
+			attachedENIs:      27,
+			blockDevices:      1,
+			expMaxVolumes:     0,
 			outpostArn:        emptyOutpostArn,
 		},
 	}

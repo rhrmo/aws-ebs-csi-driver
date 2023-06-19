@@ -360,7 +360,7 @@ func (c *cloud) CreateDisk(ctx context.Context, volumeName string, diskOptions *
 	zone := diskOptions.AvailabilityZone
 	if zone == "" {
 		zone, err = c.randomAvailabilityZone(ctx)
-		klog.V(5).Infof("[Debug] AZ is not provided. Using node AZ [%s]", zone)
+		klog.V(5).InfoS("[Debug] AZ is not provided. Using node AZ", "zone", zone)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get availability zone %w", err)
 		}
@@ -425,10 +425,10 @@ func (c *cloud) CreateDisk(ctx context.Context, volumeName string, diskOptions *
 	if err := c.waitForVolume(ctx, volumeID); err != nil {
 		// To avoid leaking volume, we should delete the volume just created
 		// TODO: Need to figure out how to handle DeleteDisk failed scenario instead of just log the error
-		if _, error := c.DeleteDisk(ctx, volumeID); error != nil {
-			klog.Errorf("%v failed to be deleted, this may cause volume leak", volumeID)
+		if _, error := c.DeleteDisk(ctx, volumeID); err != nil {
+			klog.ErrorS(error, "failed to be deleted, this may cause volume leak", "volumeID", volumeID)
 		} else {
-			klog.V(5).Infof("[Debug] %v is deleted because it is not in desired state within retry limit", volumeID)
+			klog.V(5).InfoS("[Debug] volume is deleted because it is not in desired state within retry limit", "volumeID", volumeID)
 		}
 		return nil, fmt.Errorf("failed to get an available volume in EC2: %w", err)
 	}
@@ -444,10 +444,10 @@ func (c *cloud) CreateDisk(ctx context.Context, volumeName string, diskOptions *
 		if err != nil {
 			// To avoid leaking volume, we should delete the volume just created
 			// TODO: Need to figure out how to handle DeleteDisk failed scenario instead of just log the error
-			if _, error := c.DeleteDisk(ctx, volumeID); error != nil {
-				klog.Errorf("%v failed to be deleted, this may cause volume leak", volumeID)
+			if _, error := c.DeleteDisk(ctx, volumeID); err != nil {
+				klog.ErrorS(error, "failed to be deleted, this may cause volume leak", "volumeID", volumeID)
 			} else {
-				klog.V(5).Infof("[Debug] %v is deleted because there was an error while attaching the tags", volumeID)
+				klog.V(5).InfoS("volume is deleted because there was an error while attaching the tags", "volumeID", volumeID)
 			}
 			return nil, fmt.Errorf("could not attach tags to volume: %v. %w", volumeID, err)
 		}
@@ -495,7 +495,7 @@ func (c *cloud) AttachDisk(ctx context.Context, volumeID, nodeID string) (string
 			}
 			return "", fmt.Errorf("could not attach volume %q to node %q: %w", volumeID, nodeID, attachErr)
 		}
-		klog.V(5).Infof("[Debug] AttachVolume volume=%q instance=%q request returned %v", volumeID, nodeID, resp)
+		klog.V(5).InfoS("[Debug] AttachVolume", "volumeID", volumeID, "nodeID", nodeID, "resp", resp)
 	}
 
 	attachment, err := c.WaitForAttachmentState(ctx, volumeID, volumeAttachedState, *instance.InstanceId, device.Path, device.IsAlreadyAssigned)
@@ -541,7 +541,7 @@ func (c *cloud) DetachDisk(ctx context.Context, volumeID, nodeID string) error {
 	defer device.Release(true)
 
 	if !device.IsAlreadyAssigned {
-		klog.Warningf("DetachDisk called on non-attached volume: %s", volumeID)
+		klog.InfoS("DetachDisk: called on non-attached volume", "volumeID", volumeID)
 	}
 
 	request := &ec2.DetachVolumeInput{
@@ -565,7 +565,7 @@ func (c *cloud) DetachDisk(ctx context.Context, volumeID, nodeID string) error {
 	}
 	if attachment != nil {
 		// We expect it to be nil, it is (maybe) interesting if it is not
-		klog.V(2).Infof("waitForAttachmentState returned non-nil attachment with state=detached: %v", attachment)
+		klog.V(2).InfoS("waitForAttachmentState returned non-nil attachment with state=detached", "attachment", attachment)
 	}
 
 	return nil
@@ -598,36 +598,36 @@ func (c *cloud) WaitForAttachmentState(ctx context.Context, volumeID, expectedSt
 			if isAWSErrorVolumeNotFound(err) {
 				if expectedState == volumeDetachedState {
 					// The disk doesn't exist, assume it's detached, log warning and stop waiting
-					klog.Warningf("Waiting for volume %q to be detached but the volume does not exist", volumeID)
+					klog.InfoS("Waiting for volume to be detached but the volume does not exist", "volumeID", volumeID)
 					return true, nil
 				}
 				if expectedState == volumeAttachedState {
 					// The disk doesn't exist, complain, give up waiting and report error
-					klog.Warningf("Waiting for volume %q to be attached but the volume does not exist", volumeID)
+					klog.InfoS("Waiting for volume to be attached but the volume does not exist", "volumeID", volumeID)
 					return false, err
 				}
 			}
 
-			klog.Warningf("Ignoring error from describe volume for volume %q; will retry: %q", volumeID, err)
+			klog.InfoS("Ignoring error from describe volume, will retry", "volumeID", volumeID, "err", err)
 			return false, nil
 		}
 
 		if len(volume.Attachments) > 1 {
 			// Shouldn't happen; log so we know if it is
-			klog.Warningf("Found multiple attachments for volume %q: %v", volumeID, volume)
+			klog.InfoS("Found multiple attachments for volume", "volumeID", volumeID, "volume", volume)
 		}
 		attachmentState := ""
 		for _, a := range volume.Attachments {
 			if attachmentState != "" {
 				// Shouldn't happen; log so we know if it is
-				klog.Warningf("Found multiple attachments for volume %q: %v", volumeID, volume)
+				klog.InfoS("Found multiple attachments for volume", "volumeID", volumeID, "volume", volume)
 			}
 			if a.State != nil {
 				attachment = a
 				attachmentState = *a.State
 			} else {
 				// Shouldn't happen; log so we know if it is
-				klog.Warningf("Ignoring nil attachment state for volume %q: %v", volumeID, a)
+				klog.InfoS("Ignoring nil attachment state for volume", "volumeID", volumeID, "attachment", a)
 			}
 		}
 		if attachmentState == "" {
@@ -640,12 +640,12 @@ func (c *cloud) WaitForAttachmentState(ctx context.Context, volumeID, expectedSt
 			// Retry couple of times, hoping AWS starts reporting the right status.
 			device := aws.StringValue(attachment.Device)
 			if expectedDevice != "" && device != "" && device != expectedDevice {
-				klog.Warningf("Expected device %s %s for volume %s, but found device %s %s", expectedDevice, expectedState, volumeID, device, attachmentState)
+				klog.InfoS("Expected device for volume not found", "expectedDevice", expectedDevice, "expectedState", expectedState, "volumeID", volumeID, "device", device, "attachmentState", attachmentState)
 				return false, nil
 			}
 			instanceID := aws.StringValue(attachment.InstanceId)
 			if expectedInstance != "" && instanceID != "" && instanceID != expectedInstance {
-				klog.Warningf("Expected instance %s/%s for volume %s, but found instance %s/%s", expectedInstance, expectedState, volumeID, instanceID, attachmentState)
+				klog.InfoS("Expected instance for volume not found", "expectedInstance", expectedInstance, "expectedState", expectedState, "volumeID", volumeID, "instanceID", instanceID, "attachmentState", attachmentState)
 				return false, nil
 			}
 		}
@@ -667,7 +667,7 @@ func (c *cloud) WaitForAttachmentState(ctx context.Context, volumeID, expectedSt
 			return true, nil
 		}
 		// continue waiting
-		klog.V(2).Infof("Waiting for volume %q state: actual=%s, desired=%s", volumeID, attachmentState, expectedState)
+		klog.V(2).InfoS("Waiting for volume state", "volumeID", volumeID, "actual", attachmentState, "desired", expectedState)
 		return false, nil
 	}
 
@@ -872,6 +872,24 @@ func (c *cloud) ec2SnapshotResponseToStruct(ec2Snapshot *ec2.Snapshot) *Snapshot
 	}
 
 	return snapshot
+}
+
+func (c *cloud) EnableFastSnapshotRestores(ctx context.Context, availabilityZones []string, snapshotID string) (*ec2.EnableFastSnapshotRestoresOutput, error) {
+	request := &ec2.EnableFastSnapshotRestoresInput{
+		AvailabilityZones: aws.StringSlice(availabilityZones),
+		SourceSnapshotIds: []*string{
+			aws.String(snapshotID),
+		},
+	}
+	klog.V(4).InfoS("Creating Fast Snapshot Restores", "snapshotID", snapshotID, "availabilityZones", availabilityZones)
+	response, err := c.ec2.EnableFastSnapshotRestoresWithContext(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if len(response.Unsuccessful) > 0 {
+		return response, fmt.Errorf("failed to create fast snapshot restores for snapshot %s: %v", snapshotID, response.Unsuccessful)
+	}
+	return response, nil
 }
 
 func (c *cloud) getVolume(ctx context.Context, request *ec2.DescribeVolumesInput) (*ec2.Volume, error) {
@@ -1112,7 +1130,7 @@ func (c *cloud) ResizeDisk(ctx context.Context, volumeID string, newSizeBytes in
 	// Even if existing volume size is greater than user requested size, we should ensure that there are no pending
 	// volume modifications objects or volume has completed previously issued modification request.
 	if oldSizeGiB >= newSizeGiB {
-		klog.V(5).Infof("[Debug] Volume %q current size (%d GiB) is greater or equal to the new size (%d GiB)", volumeID, oldSizeGiB, newSizeGiB)
+		klog.V(5).InfoS("[Debug] Volume", "volumeID", volumeID, "oldSizeGiB", oldSizeGiB, "newSizeGiB", newSizeGiB)
 		err = c.waitForVolumeSize(ctx, volumeID)
 		if err != nil && !errors.Is(err, VolumeNotBeingModified) {
 			return oldSizeGiB, err
@@ -1125,7 +1143,7 @@ func (c *cloud) ResizeDisk(ctx context.Context, volumeID string, newSizeBytes in
 		Size:     aws.Int64(newSizeGiB),
 	}
 
-	klog.V(4).Infof("expanding volume %q to size %d", volumeID, newSizeGiB)
+	klog.V(4).InfoS("expanding volume", "volumeID", volumeID, "newSizeGiB", newSizeGiB)
 	response, err := c.ec2.ModifyVolumeWithContext(ctx, req)
 	if err != nil {
 		return 0, fmt.Errorf("could not modify AWS volume %q: %w", volumeID, err)
@@ -1236,6 +1254,19 @@ func (c *cloud) randomAvailabilityZone(ctx context.Context) (string, error) {
 	return zones[0], nil
 }
 
+// AvailabilityZones returns availability zones from the given region
+func (c *cloud) AvailabilityZones(ctx context.Context) (map[string]struct{}, error) {
+	response, err := c.ec2.DescribeAvailabilityZonesWithContext(ctx, &ec2.DescribeAvailabilityZonesInput{})
+	if err != nil {
+		return nil, fmt.Errorf("error describing availability zones: %w", err)
+	}
+	zones := make(map[string]struct{})
+	for _, zone := range response.AvailabilityZones {
+		zones[*zone.ZoneName] = struct{}{}
+	}
+	return zones, nil
+}
+
 func volumeModificationDone(state string) bool {
 	if state == ec2.VolumeModificationStateCompleted || state == ec2.VolumeModificationStateOptimizing {
 		return true
@@ -1266,19 +1297,19 @@ func capIOPS(volumeType string, requestedCapacityGiB int64, requestedIops int64,
 	if iops < minTotalIOPS {
 		if allowIncrease {
 			iops = minTotalIOPS
-			klog.V(5).Infof("[Debug] Increased IOPS for %s %d GB volume to the min supported limit: %d", volumeType, requestedCapacityGiB, iops)
+			klog.V(5).InfoS("[Debug] Increased IOPS to the min supported limit", "volumeType", volumeType, "requestedCapacityGiB", requestedCapacityGiB, "limit", iops)
 		} else {
 			return 0, fmt.Errorf("invalid IOPS: %d is too low, it must be at least %d", iops, minTotalIOPS)
 		}
 	}
 	if iops > maxTotalIOPS {
 		iops = maxTotalIOPS
-		klog.V(5).Infof("[Debug] Capped IOPS for %s %d GB volume at the max supported limit: %d", volumeType, requestedCapacityGiB, iops)
+		klog.V(5).InfoS("[Debug] Capped IOPS, volume at the max supported limit", "volumeType", volumeType, "requestedCapacityGiB", requestedCapacityGiB, "limit", iops)
 	}
 	maxIopsByCapacity := maxIOPSPerGB * requestedCapacityGiB
 	if iops > maxIopsByCapacity && maxIopsByCapacity >= minTotalIOPS {
 		iops = maxIopsByCapacity
-		klog.V(5).Infof("[Debug] Capped IOPS for %s %d GB volume at %d IOPS/GB: %d", volumeType, requestedCapacityGiB, maxIOPSPerGB, iops)
+		klog.V(5).InfoS("[Debug] Capped IOPS for volume", "volumeType", volumeType, "requestedCapacityGiB", requestedCapacityGiB, "maxIOPSPerGB", maxIOPSPerGB, "limit", iops)
 	}
 	return iops, nil
 }

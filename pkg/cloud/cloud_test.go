@@ -721,7 +721,7 @@ func TestAttachDisk(t *testing.T) {
 
 			vol := &ec2.Volume{
 				VolumeId:    aws.String(tc.volumeID),
-				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdba"), InstanceId: aws.String("node-1234"), State: aws.String("attached")}},
+				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdaa"), InstanceId: aws.String("node-1234"), State: aws.String("attached")}},
 			}
 
 			ctx := context.Background()
@@ -1053,6 +1053,142 @@ func TestCreateSnapshot(t *testing.T) {
 					if snapshot.SourceVolumeID != tc.expSnapshot.SourceVolumeID {
 						t.Fatalf("CreateSnapshot() failed: expected source volume ID %s, got %v", tc.expSnapshot.SourceVolumeID, snapshot.SourceVolumeID)
 					}
+				}
+			}
+
+			mockCtrl.Finish()
+		})
+	}
+}
+
+func TestEnableFastSnapshotRestores(t *testing.T) {
+	testCases := []struct {
+		name              string
+		snapshotID        string
+		availabilityZones []string
+		expOutput         *ec2.EnableFastSnapshotRestoresOutput
+		expErr            error
+	}{
+		{
+			name:              "success: normal",
+			snapshotID:        "snap-test-id",
+			availabilityZones: []string{"us-west-2a", "us-west-2b"},
+			expOutput: &ec2.EnableFastSnapshotRestoresOutput{
+				Successful: []*ec2.EnableFastSnapshotRestoreSuccessItem{{
+					AvailabilityZone: aws.String("us-west-2a,us-west-2b"),
+					SnapshotId:       aws.String("snap-test-id")}},
+				Unsuccessful: []*ec2.EnableFastSnapshotRestoreErrorItem{},
+			},
+			expErr: nil,
+		},
+		{
+			name:              "fail: unsuccessful response",
+			snapshotID:        "snap-test-id",
+			availabilityZones: []string{"us-west-2a", "invalid-zone"},
+			expOutput: &ec2.EnableFastSnapshotRestoresOutput{
+				Unsuccessful: []*ec2.EnableFastSnapshotRestoreErrorItem{{
+					SnapshotId: aws.String("snap-test-id"),
+					FastSnapshotRestoreStateErrors: []*ec2.EnableFastSnapshotRestoreStateErrorItem{
+						{AvailabilityZone: aws.String("us-west-2a,invalid-zone"),
+							Error: &ec2.EnableFastSnapshotRestoreStateError{
+								Message: aws.String("failed to create fast snapshot restore")}},
+					},
+				}},
+			},
+			expErr: fmt.Errorf("failed to create fast snapshot restores for snapshot"),
+		},
+		{
+			name:              "fail: error",
+			snapshotID:        "",
+			availabilityZones: nil,
+			expOutput:         nil,
+			expErr:            fmt.Errorf("EnableFastSnapshotRestores error"),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockCtrl := gomock.NewController(t)
+			mockEC2 := NewMockEC2(mockCtrl)
+			c := newCloud(mockEC2)
+
+			ctx := context.Background()
+			mockEC2.EXPECT().EnableFastSnapshotRestoresWithContext(gomock.Eq(ctx), gomock.Any()).Return(tc.expOutput, tc.expErr).AnyTimes()
+
+			response, err := c.EnableFastSnapshotRestores(ctx, tc.availabilityZones, tc.snapshotID)
+
+			if err != nil {
+				if tc.expErr == nil {
+					t.Fatalf("EnableFastSnapshotRestores() failed: expected no error, got: %v", err)
+				}
+				if err.Error() != tc.expErr.Error() {
+					t.Fatalf("EnableFastSnapshotRestores() failed: expected error %v, got %v", tc.expErr, err)
+				}
+			} else {
+				if tc.expErr != nil {
+					t.Fatalf("EnableFastSnapshotRestores() failed: expected error %v, got nothing", tc.expErr)
+				}
+				if len(response.Successful) == 0 || len(response.Unsuccessful) > 0 {
+					t.Fatalf("EnableFastSnapshotRestores() failed: expected successful response, got %v", response)
+				}
+				if *response.Successful[0].SnapshotId != tc.snapshotID {
+					t.Fatalf("EnableFastSnapshotRestores() failed: expected successful response to have SnapshotId %s, got %s", tc.snapshotID, *response.Successful[0].SnapshotId)
+				}
+				az := strings.Split(*response.Successful[0].AvailabilityZone, ",")
+				if !reflect.DeepEqual(az, tc.availabilityZones) {
+					t.Fatalf("EnableFastSnapshotRestores() failed: expected successful response to have AvailabilityZone %v, got %v", az, tc.availabilityZones)
+				}
+			}
+
+			mockCtrl.Finish()
+		})
+	}
+}
+
+func TestAvailabilityZones(t *testing.T) {
+	testCases := []struct {
+		name             string
+		availabilityZone string
+		expOutput        *ec2.DescribeAvailabilityZonesOutput
+		expErr           error
+	}{
+		{
+			name:             "success: normal",
+			availabilityZone: expZone,
+			expOutput: &ec2.DescribeAvailabilityZonesOutput{
+				AvailabilityZones: []*ec2.AvailabilityZone{
+					{ZoneName: aws.String(expZone)},
+				}},
+			expErr: nil,
+		},
+		{
+			name:             "fail: error",
+			availabilityZone: "",
+			expOutput:        nil,
+			expErr:           fmt.Errorf("TestAvailabilityZones error"),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockCtrl := gomock.NewController(t)
+			mockEC2 := NewMockEC2(mockCtrl)
+			c := newCloud(mockEC2)
+
+			ctx := context.Background()
+			mockEC2.EXPECT().DescribeAvailabilityZonesWithContext(gomock.Eq(ctx), gomock.Any()).Return(tc.expOutput, tc.expErr).AnyTimes()
+
+			az, err := c.AvailabilityZones(ctx)
+			if err != nil {
+				if tc.expErr == nil {
+					t.Fatalf("AvailabilityZones() failed: expected no error, got: %v", err)
+				}
+			} else {
+				if tc.expErr != nil {
+					t.Fatalf("AvailabilityZones() failed: expected error, got nothing")
+				}
+				if val, ok := az[tc.availabilityZone]; !ok {
+					t.Fatalf("AvailabilityZones() failed: expected to find %s, got %v", tc.availabilityZone, val)
 				}
 			}
 
@@ -1614,7 +1750,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeAttachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  false,
 			expectError:      false,
 		},
@@ -1623,7 +1759,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeDetachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  false,
 			expectError:      false,
 		},
@@ -1632,7 +1768,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeDetachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  false,
 			expectError:      false,
 		},
@@ -1641,7 +1777,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeAttachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  false,
 			expectError:      true,
 		},
@@ -1650,7 +1786,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeAttachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdbb",
+			expectedDevice:   "/dev/xvdab",
 			alreadyAssigned:  false,
 			expectError:      true,
 		},
@@ -1659,7 +1795,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeAttachedState,
 			expectedInstance: "1235",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  false,
 			expectError:      true,
 		},
@@ -1668,7 +1804,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeAttachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  true,
 			expectError:      true,
 		},
@@ -1677,7 +1813,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeAttachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  false,
 			expectError:      false,
 		},
@@ -1686,7 +1822,7 @@ func TestWaitForAttachmentState(t *testing.T) {
 			volumeID:         "vol-test-1234",
 			expectedState:    volumeAttachedState,
 			expectedInstance: "1234",
-			expectedDevice:   "/dev/xvdba",
+			expectedDevice:   "/dev/xvdaa",
 			alreadyAssigned:  false,
 			expectError:      true,
 		},
@@ -1702,22 +1838,22 @@ func TestWaitForAttachmentState(t *testing.T) {
 
 			attachedVol := &ec2.Volume{
 				VolumeId:    aws.String(tc.volumeID),
-				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdba"), InstanceId: aws.String("1234"), State: aws.String("attached")}},
+				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdaa"), InstanceId: aws.String("1234"), State: aws.String("attached")}},
 			}
 
 			attachingVol := &ec2.Volume{
 				VolumeId:    aws.String(tc.volumeID),
-				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdba"), InstanceId: aws.String("1234"), State: aws.String("attaching")}},
+				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdaa"), InstanceId: aws.String("1234"), State: aws.String("attaching")}},
 			}
 
 			detachedVol := &ec2.Volume{
 				VolumeId:    aws.String(tc.volumeID),
-				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdba"), InstanceId: aws.String("1234"), State: aws.String("detached")}},
+				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdaa"), InstanceId: aws.String("1234"), State: aws.String("detached")}},
 			}
 
 			multipleAttachmentsVol := &ec2.Volume{
 				VolumeId:    aws.String(tc.volumeID),
-				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdba"), InstanceId: aws.String("1235"), State: aws.String("attached")}, {Device: aws.String("/dev/xvdba"), InstanceId: aws.String("1234"), State: aws.String("attached")}},
+				Attachments: []*ec2.VolumeAttachment{{Device: aws.String("/dev/xvdaa"), InstanceId: aws.String("1235"), State: aws.String("attached")}, {Device: aws.String("/dev/xvdaa"), InstanceId: aws.String("1234"), State: aws.String("attached")}},
 			}
 
 			ctx := context.Background()

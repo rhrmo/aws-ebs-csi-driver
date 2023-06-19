@@ -22,7 +22,7 @@ var DefaultEC2MetadataClient = func() (EC2Metadata, error) {
 
 func EC2MetadataInstanceInfo(svc EC2Metadata, regionFromSession string) (*Metadata, error) {
 	doc, err := svc.GetInstanceIdentityDocument()
-	klog.Infof("regionFromSession %v", regionFromSession)
+	klog.InfoS("Retrieving EC2 instance identity metadata", "regionFromSession", regionFromSession)
 	if err != nil {
 		return nil, fmt.Errorf("could not get EC2 instance identity metadata: %w", err)
 	}
@@ -61,17 +61,14 @@ func EC2MetadataInstanceInfo(svc EC2Metadata, regionFromSession string) (*Metada
 	}
 
 	attachedENIs := strings.Count(enis, "\n") + 1
-
-	//As block device mapping contains 1 volume for the AMI.
-	blockDevMappings := 1
+	blockDevMappings := 0
 
 	if !util.IsSBE(doc.Region) {
 		mappings, mapErr := svc.GetMetadata(blockDevicesEndpoint)
-		// The output contains 1 volume for the AMI. Any other block device contributes to the attachment limit
-		blockDevMappings = strings.Count(mappings, "\n")
 		if mapErr != nil {
 			return nil, fmt.Errorf("could not get number of block device mappings: %w", err)
 		}
+		blockDevMappings = strings.Count(mappings, "ebs")
 	}
 
 	instanceInfo := Metadata{
@@ -90,13 +87,13 @@ func EC2MetadataInstanceInfo(svc EC2Metadata, regionFromSession string) (*Metada
 	if err != nil && !strings.Contains(err.Error(), "404") {
 		return nil, fmt.Errorf("something went wrong while getting EC2 outpost arn: %w", err)
 	} else if err == nil {
-		klog.Infof("Running in an outpost environment with arn: %s", outpostArn)
+		klog.InfoS("Running in an outpost environment with arn", "outpostArn", outpostArn)
 		outpostArn = strings.ReplaceAll(outpostArn, "outpost/", "")
 		parsedArn, err := arn.Parse(outpostArn)
 		if err != nil {
-			klog.Warningf("Failed to parse the outpost arn: %s", outpostArn)
+			klog.InfoS("Failed to parse the outpost arn", "outpostArn", outpostArn)
 		} else {
-			klog.Infof("Using outpost arn: %v", parsedArn)
+			klog.InfoS("Using outpost arn", "parsedArn", parsedArn)
 			instanceInfo.OutpostArn = parsedArn
 		}
 	}

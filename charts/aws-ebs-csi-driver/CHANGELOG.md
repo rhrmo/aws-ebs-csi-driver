@@ -1,5 +1,39 @@
 # Helm chart
 
+## v2.17.2
+* Bump driver version to `v1.17.0`
+* Bump `external-resizer` version to `v4.2.0`
+* All other sidecars have been updated to the latest rebuild (without an associated version change)
+
+## v2.17.1
+* Bump driver version to `v1.16.1`
+
+## v2.17.0
+* Bump driver version to `v1.16.0`
+* Add support for JSON logging ([#1467](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1467), [@torredil](https://github.com/torredil))
+    * `--logging-format` flag has been added to set the log format. Valid values are `text` and `json`. The default value is `text`.
+    * `--logtostderr` is deprecated.
+    * Long arguments prefixed with `-` are no longer supported, and must be prefixed with `--`. For example, `--volume-attach-limit` instead of `-volume-attach-limit`.
+* The sidecars have been updated. The new versions are:
+    - csi-provisioner: `v3.4.0`
+    - csi-attacher: `v4.1.0`
+    - csi-snapshotter: `v6.2.1`
+    - livenessprobe: `v2.9.0`
+    - csi-resizer: `v1.7.0`
+    - node-driver-registrar: `v2.7.0`
+
+
+## v2.16.0
+* Bump driver version to `v1.15.0`
+* Change default sidecars to EKS-D ([#1475](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/1475), [@ConnorJC3](https://github.com/ConnorJC3), [@torredil](https://github.com/torredil))
+* The sidecars have been updated. The new versions are:
+    - csi-provisioner: `v3.3.0`
+    - csi-attacher: `v4.0.0`
+    - csi-snapshotter: `v6.1.0`
+    - livenessprobe: `v2.8.0`
+    - csi-resizer: `v1.6.0`
+    - node-driver-registrar: `v2.6.2`
+
 ## v2.15.1
 * Bugfix: Prevent deployment of testing resources during normal installation by adding `helm.sh/hook: test` annotation.
 
