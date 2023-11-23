@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/arn"
+	"github.com/awslabs/volume-modifier-for-k8s/pkg/rpc"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/cloud"
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/driver/internal"
@@ -36,16 +37,13 @@ import (
 	"k8s.io/klog/v2"
 )
 
-var (
-	// volumeCaps represents how the volume could be accessed.
-	// It is SINGLE_NODE_WRITER since EBS volume could only be
-	// attached to a single node at any given time.
-	volumeCaps = []csi.VolumeCapability_AccessMode{
-		{
-			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-		},
-	}
+// Supported access modes
+const (
+	SingleNodeWriter     = csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER
+	MultiNodeMultiWriter = csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER
+)
 
+var (
 	// controllerCaps represents the capability of controller service
 	controllerCaps = []csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -60,9 +58,12 @@ const isManagedByDriver = "true"
 
 // controllerService represents the controller service of CSI driver
 type controllerService struct {
-	cloud         cloud.Cloud
-	inFlight      *internal.InFlight
-	driverOptions *DriverOptions
+	cloud               cloud.Cloud
+	inFlight            *internal.InFlight
+	driverOptions       *DriverOptions
+	modifyVolumeManager *modifyVolumeManager
+
+	rpc.UnimplementedModifyServer
 }
 
 var (
@@ -88,15 +89,17 @@ func newControllerService(driverOptions *DriverOptions) controllerService {
 		region = metadata.GetRegion()
 	}
 
-	cloudSrv, err := NewCloudFunc(region, driverOptions.awsSdkDebugLog)
+	klog.InfoS("batching", "status", driverOptions.batching)
+	cloudSrv, err := NewCloudFunc(region, driverOptions.awsSdkDebugLog, driverOptions.userAgentExtra, driverOptions.batching)
 	if err != nil {
 		panic(err)
 	}
 
 	return controllerService{
-		cloud:         cloudSrv,
-		inFlight:      internal.NewInFlight(),
-		driverOptions: driverOptions,
+		cloud:               cloudSrv,
+		inFlight:            internal.NewInFlight(),
+		driverOptions:       driverOptions,
+		modifyVolumeManager: newModifyVolumeManager(),
 	}
 }
 
@@ -110,6 +113,15 @@ func (d *controllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, err
 	}
 	volName := req.GetName()
+	volCap := req.GetVolumeCapabilities()
+
+	multiAttach := false
+	for _, c := range volCap {
+		if c.GetAccessMode().GetMode() == MultiNodeMultiWriter && isBlock(c) {
+			klog.V(4).InfoS("CreateVolume: multi-attach is enabled", "volumeID", volName)
+			multiAttach = true
+		}
+	}
 
 	// check if a request is already in-flight
 	if ok := d.inFlight.Insert(volName); !ok {
@@ -132,7 +144,12 @@ func (d *controllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 			cloud.VolumeNameTagKey:   volName,
 			cloud.AwsEbsDriverTagKey: isManagedByDriver,
 		}
-		blockSize string
+		blockSize       string
+		inodeSize       string
+		bytesPerInode   string
+		numberOfInodes  string
+		ext4BigAlloc    bool
+		ext4ClusterSize string
 	)
 
 	tProps := new(template.PVProps)
@@ -180,11 +197,34 @@ func (d *controllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 				blockExpress = true
 			}
 		case BlockSizeKey:
-			_, err = strconv.Atoi(value)
-			if err != nil {
+			if isAlphanumeric := util.StringIsAlphanumeric(value); !isAlphanumeric {
 				return nil, status.Errorf(codes.InvalidArgument, "Could not parse blockSize (%s): %v", value, err)
 			}
 			blockSize = value
+		case InodeSizeKey:
+			if isAlphanumeric := util.StringIsAlphanumeric(value); !isAlphanumeric {
+				return nil, status.Errorf(codes.InvalidArgument, "Could not parse inodeSize (%s): %v", value, err)
+			}
+			inodeSize = value
+		case BytesPerInodeKey:
+			if isAlphanumeric := util.StringIsAlphanumeric(value); !isAlphanumeric {
+				return nil, status.Errorf(codes.InvalidArgument, "Could not parse bytesPerInode (%s): %v", value, err)
+			}
+			bytesPerInode = value
+		case NumberOfInodesKey:
+			if isAlphanumeric := util.StringIsAlphanumeric(value); !isAlphanumeric {
+				return nil, status.Errorf(codes.InvalidArgument, "Could not parse numberOfInodes (%s): %v", value, err)
+			}
+			numberOfInodes = value
+		case Ext4BigAllocKey:
+			if value == "true" {
+				ext4BigAlloc = true
+			}
+		case Ext4ClusterSizeKey:
+			if isAlphanumeric := util.StringIsAlphanumeric(value); !isAlphanumeric {
+				return nil, status.Errorf(codes.InvalidArgument, "Could not parse ext4ClusterSize (%s): %v", value, err)
+			}
+			ext4ClusterSize = value
 		default:
 			if strings.HasPrefix(key, TagKeyPrefix) {
 				scTags = append(scTags, value)
@@ -194,30 +234,47 @@ func (d *controllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
+	responseCtx := map[string]string{}
+
 	if len(blockSize) > 0 {
-		for _, volCap := range req.GetVolumeCapabilities() {
-			switch volCap.GetAccessType().(type) {
-			case *csi.VolumeCapability_Block:
-				return nil, status.Error(codes.InvalidArgument, "Cannot use block size with block volume")
-			}
-
-			mountVolume := volCap.GetMount()
-			if mountVolume == nil {
-				return nil, status.Error(codes.InvalidArgument, "CreateVolume: mount is nil within volume capability")
-			}
-
-			fsType := mountVolume.GetFsType()
-
-			if _, ok := BlockSizeExcludedFSTypes[fsType]; ok {
-				return nil, status.Errorf(codes.InvalidArgument, "Cannot use block size with fstype %s", fsType)
-			}
+		responseCtx[BlockSizeKey] = blockSize
+		if err = validateFormattingOption(volCap, BlockSizeKey, FileSystemConfigs); err != nil {
+			return nil, err
+		}
+	}
+	if len(inodeSize) > 0 {
+		responseCtx[InodeSizeKey] = inodeSize
+		if err = validateFormattingOption(volCap, InodeSizeKey, FileSystemConfigs); err != nil {
+			return nil, err
+		}
+	}
+	if len(bytesPerInode) > 0 {
+		responseCtx[BytesPerInodeKey] = bytesPerInode
+		if err = validateFormattingOption(volCap, BytesPerInodeKey, FileSystemConfigs); err != nil {
+			return nil, err
+		}
+	}
+	if len(numberOfInodes) > 0 {
+		responseCtx[NumberOfInodesKey] = numberOfInodes
+		if err = validateFormattingOption(volCap, NumberOfInodesKey, FileSystemConfigs); err != nil {
+			return nil, err
+		}
+	}
+	if ext4BigAlloc {
+		responseCtx[Ext4BigAllocKey] = "true"
+		if err = validateFormattingOption(volCap, Ext4BigAllocKey, FileSystemConfigs); err != nil {
+			return nil, err
+		}
+	}
+	if len(ext4ClusterSize) > 0 {
+		responseCtx[Ext4ClusterSizeKey] = ext4ClusterSize
+		if err = validateFormattingOption(volCap, Ext4ClusterSizeKey, FileSystemConfigs); err != nil {
+			return nil, err
 		}
 	}
 
-	if volumeType == cloud.VolumeTypeIO1 {
-		if iopsPerGB == 0 {
-			return nil, status.Errorf(codes.InvalidArgument, "The parameter IOPSPerGB must be specified for io1 volumes")
-		}
+	if !ext4BigAlloc && len(ext4ClusterSize) > 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "Cannot set ext4BigAllocClusterSize when ext4BigAlloc is false")
 	}
 
 	if blockExpress && volumeType != cloud.VolumeTypeIO2 {
@@ -279,6 +336,7 @@ func (d *controllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 		BlockExpress:           blockExpress,
 		KmsKeyID:               kmsKeyID,
 		SnapshotID:             snapshotID,
+		MultiAttachEnabled:     multiAttach,
 	}
 
 	disk, err := d.cloud.CreateDisk(ctx, volName, opts)
@@ -292,7 +350,7 @@ func (d *controllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 		return nil, status.Errorf(errCode, "Could not create volume %q: %v", volName, err)
 	}
-	return newCreateVolumeResponse(disk, blockSize), nil
+	return newCreateVolumeResponse(disk, responseCtx), nil
 }
 
 func validateCreateVolumeRequest(req *csi.CreateVolumeRequest) error {
@@ -307,10 +365,7 @@ func validateCreateVolumeRequest(req *csi.CreateVolumeRequest) error {
 	}
 
 	if !isValidVolumeCapabilities(volCaps) {
-		modes := util.GetAccessModes(volCaps)
-		stringModes := strings.Join(*modes, ", ")
-		errString := "Volume capabilities " + stringModes + " not supported. Only AccessModes[ReadWriteOnce] supported."
-		return status.Error(codes.InvalidArgument, errString)
+		return status.Error(codes.InvalidArgument, "Volume capabilities not supported")
 	}
 	return nil
 }
@@ -322,7 +377,6 @@ func (d *controllerService) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	volumeID := req.GetVolumeId()
-
 	// check if a request is already in-flight
 	if ok := d.inFlight.Insert(volumeID); !ok {
 		msg := fmt.Sprintf(internal.VolumeOperationAlreadyExistsErrorMsg, volumeID)
@@ -357,27 +411,17 @@ func (d *controllerService) ControllerPublishVolume(ctx context.Context, req *cs
 	volumeID := req.GetVolumeId()
 	nodeID := req.GetNodeId()
 
-	if !d.cloud.IsExistInstance(ctx, nodeID) {
-		return nil, status.Errorf(codes.NotFound, "Instance %q not found", nodeID)
+	if !d.inFlight.Insert(volumeID + nodeID) {
+		return nil, status.Error(codes.Aborted, fmt.Sprintf(internal.VolumeOperationAlreadyExistsErrorMsg, volumeID))
 	}
-	disk, err := d.cloud.GetDiskByID(ctx, volumeID)
-	if err != nil {
-		if errors.Is(err, cloud.ErrNotFound) {
-			return nil, status.Error(codes.NotFound, "Volume not found")
-		}
-		return nil, status.Errorf(codes.Internal, "Could not get volume with ID %q: %v", volumeID, err)
-	}
+	defer d.inFlight.Delete(volumeID + nodeID)
 
-	// If given volumeId already assigned to given node, will directly return current device path
+	klog.V(2).InfoS("ControllerPublishVolume: attaching", "volumeID", volumeID, "nodeID", nodeID)
 	devicePath, err := d.cloud.AttachDisk(ctx, volumeID, nodeID)
 	if err != nil {
-		if errors.Is(err, cloud.ErrVolumeInUse) {
-			return nil, status.Error(codes.FailedPrecondition, strings.Join(disk.Attachments, ","))
-		}
-		// TODO: Check volume capability matches for ALREADY_EXISTS
 		return nil, status.Errorf(codes.Internal, "Could not attach volume %q to node %q: %v", volumeID, nodeID, err)
 	}
-	klog.V(5).InfoS("[Debug] ControllerPublishVolume: attached to node", "volumeID", volumeID, "nodeID", nodeID, "devicePath", devicePath)
+	klog.InfoS("ControllerPublishVolume: attached", "volumeID", volumeID, "nodeID", nodeID, "devicePath", devicePath)
 
 	pvInfo := map[string]string{DevicePathKey: devicePath}
 	return &csi.ControllerPublishVolumeResponse{PublishContext: pvInfo}, nil
@@ -397,18 +441,15 @@ func validateControllerPublishVolumeRequest(req *csi.ControllerPublishVolumeRequ
 		return status.Error(codes.InvalidArgument, "Volume capability not provided")
 	}
 
-	caps := []*csi.VolumeCapability{volCap}
-	if !isValidVolumeCapabilities(caps) {
-		modes := util.GetAccessModes(caps)
-		stringModes := strings.Join(*modes, ", ")
-		errString := "Volume capabilities " + stringModes + " not supported. Only AccessModes[ReadWriteOnce] supported."
-		return status.Error(codes.InvalidArgument, errString)
+	if !isValidCapability(volCap) {
+		return status.Error(codes.InvalidArgument, "Volume capability not supported")
 	}
 	return nil
 }
 
 func (d *controllerService) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	klog.V(4).InfoS("ControllerUnpublishVolume: called", "args", *req)
+
 	if err := validateControllerUnpublishVolumeRequest(req); err != nil {
 		return nil, err
 	}
@@ -416,13 +457,20 @@ func (d *controllerService) ControllerUnpublishVolume(ctx context.Context, req *
 	volumeID := req.GetVolumeId()
 	nodeID := req.GetNodeId()
 
+	if !d.inFlight.Insert(volumeID + nodeID) {
+		return nil, status.Error(codes.Aborted, fmt.Sprintf(internal.VolumeOperationAlreadyExistsErrorMsg, volumeID))
+	}
+	defer d.inFlight.Delete(volumeID + nodeID)
+
+	klog.V(2).InfoS("ControllerUnpublishVolume: detaching", "volumeID", volumeID, "nodeID", nodeID)
 	if err := d.cloud.DetachDisk(ctx, volumeID, nodeID); err != nil {
 		if errors.Is(err, cloud.ErrNotFound) {
+			klog.InfoS("ControllerUnpublishVolume: attachment not found", "volumeID", volumeID, "nodeID", nodeID)
 			return &csi.ControllerUnpublishVolumeResponse{}, nil
 		}
 		return nil, status.Errorf(codes.Internal, "Could not detach volume %q from node %q: %v", volumeID, nodeID, err)
 	}
-	klog.V(5).InfoS("[Debug] ControllerUnpublishVolume: detached from node", "volumeID", volumeID, "nodeID", nodeID)
+	klog.InfoS("ControllerUnpublishVolume: detached", "volumeID", volumeID, "nodeID", nodeID)
 
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
@@ -511,9 +559,26 @@ func (d *controllerService) ControllerExpandVolume(ctx context.Context, req *csi
 		return nil, status.Error(codes.InvalidArgument, "After round-up, volume size exceeds the limit specified")
 	}
 
-	actualSizeGiB, err := d.cloud.ResizeDisk(ctx, volumeID, newSize)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not resize volume %q: %v", volumeID, err)
+	responseChan := make(chan modifyVolumeResponse)
+	modifyVolumeRequest := modifyVolumeRequest{
+		newSize:      newSize,
+		responseChan: responseChan,
+	}
+
+	// Intentionally not pass in context as we deal with context locally in this method
+	d.addModifyVolumeRequest(volumeID, &modifyVolumeRequest) //nolint:contextcheck
+
+	var actualSizeGiB int64
+
+	select {
+	case response := <-responseChan:
+		if response.err != nil {
+			return nil, status.Errorf(codes.Internal, "Could not resize volume %q: %v", volumeID, response.err)
+		} else {
+			actualSizeGiB = response.volumeSize
+		}
+	case <-ctx.Done():
+		return nil, status.Errorf(codes.Internal, "Could not resize volume %q: context cancelled", volumeID)
 	}
 
 	nodeExpansionRequired := true
@@ -534,23 +599,40 @@ func (d *controllerService) ControllerGetVolume(ctx context.Context, req *csi.Co
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func isValidVolumeCapabilities(volCaps []*csi.VolumeCapability) bool {
-	hasSupport := func(cap *csi.VolumeCapability) bool {
-		for _, c := range volumeCaps {
-			if c.GetMode() == cap.AccessMode.GetMode() {
-				return true
-			}
+func isValidVolumeCapabilities(v []*csi.VolumeCapability) bool {
+	for _, c := range v {
+		if !isValidCapability(c) {
+			return false
 		}
+	}
+	return true
+}
+
+func isValidCapability(c *csi.VolumeCapability) bool {
+	accessMode := c.GetAccessMode().GetMode()
+
+	//nolint:exhaustive
+	switch accessMode {
+	case SingleNodeWriter:
+		return true
+
+	case MultiNodeMultiWriter:
+		if isBlock(c) {
+			return true
+		} else {
+			klog.InfoS("isValidCapability: access mode is only supported for block devices", "accessMode", accessMode)
+			return false
+		}
+
+	default:
+		klog.InfoS("isValidCapability: access mode is not supported", "accessMode", accessMode)
 		return false
 	}
+}
 
-	foundAll := true
-	for _, c := range volCaps {
-		if !hasSupport(c) {
-			foundAll = false
-		}
-	}
-	return foundAll
+func isBlock(cap *csi.VolumeCapability) bool {
+	_, isBlock := cap.GetAccessType().(*csi.VolumeCapability_Block)
+	return isBlock
 }
 
 func isValidVolumeContext(volContext map[string]string) bool {
@@ -820,7 +902,7 @@ func getOutpostArn(requirement *csi.TopologyRequirement) string {
 	return ""
 }
 
-func newCreateVolumeResponse(disk *cloud.Disk, blockSize string) *csi.CreateVolumeResponse {
+func newCreateVolumeResponse(disk *cloud.Disk, ctx map[string]string) *csi.CreateVolumeResponse {
 	var src *csi.VolumeContentSource
 	if disk.SnapshotID != "" {
 		src = &csi.VolumeContentSource{
@@ -843,16 +925,11 @@ func newCreateVolumeResponse(disk *cloud.Disk, blockSize string) *csi.CreateVolu
 		segments[AwsOutpostIDKey] = strings.ReplaceAll(arn.Resource, "outpost/", "")
 	}
 
-	context := map[string]string{}
-	if len(blockSize) > 0 {
-		context[BlockSizeKey] = blockSize
-	}
-
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:      disk.VolumeID,
 			CapacityBytes: util.GiBToBytes(disk.CapacityGiB),
-			VolumeContext: context,
+			VolumeContext: ctx,
 			AccessibleTopology: []*csi.Topology{
 				{
 					Segments: segments,
@@ -942,4 +1019,25 @@ func BuildOutpostArn(segments map[string]string) string {
 		segments[AwsAccountIDKey],
 		segments[AwsOutpostIDKey],
 	)
+}
+
+func validateFormattingOption(volumeCapabilities []*csi.VolumeCapability, paramName string, fsConfigs map[string]fileSystemConfig) error {
+	for _, volCap := range volumeCapabilities {
+		switch volCap.GetAccessType().(type) {
+		case *csi.VolumeCapability_Block:
+			return status.Error(codes.InvalidArgument, fmt.Sprintf("Cannot use %s with block volume", paramName))
+		}
+
+		mountVolume := volCap.GetMount()
+		if mountVolume == nil {
+			return status.Error(codes.InvalidArgument, "CreateVolume: mount is nil within volume capability")
+		}
+
+		fsType := mountVolume.GetFsType()
+		if supported := fsConfigs[fsType].isParameterSupported(paramName); !supported {
+			return status.Errorf(codes.InvalidArgument, "Cannot use %s with fstype %s", paramName, fsType)
+		}
+	}
+
+	return nil
 }

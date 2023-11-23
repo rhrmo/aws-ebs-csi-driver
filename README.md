@@ -1,12 +1,5 @@
-> **Warning**
-> 
-> [`k8s.gcr.io` will be redirected on Monday March 20th](https://kubernetes.io/blog/2023/03/10/image-registry-redirect/), and may stop working entirely in the near future. If you are using `k8s.gcr.io` you MUST [move to `registry.k8s.io`](https://kubernetes.io/blog/2023/02/06/k8s-gcr-io-freeze-announcement/) to continue receiving support.
-> 
-> Issues related to `k8s.gcr.io` will no longer be accepted. `public.ecr.aws` and `registry.k8s.io` images are unaffected and remain supported as per [the support policy](https://github.com/kubernetes-sigs/aws-ebs-csi-driver#support).
-
 # Amazon Elastic Block Store (EBS) CSI driver
 [![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/kubernetes-sigs/aws-ebs-csi-driver)](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/releases)
-[![Coverage Status](https://coveralls.io/repos/github/kubernetes-sigs/aws-ebs-csi-driver/badge.svg?branch=master)](https://coveralls.io/github/kubernetes-sigs/aws-ebs-csi-driver?branch=master)
 [![Go Report Card](https://goreportcard.com/badge/github.com/kubernetes-sigs/aws-ebs-csi-driver)](https://goreportcard.com/report/github.com/kubernetes-sigs/aws-ebs-csi-driver)
 
 ## Overview
@@ -20,19 +13,30 @@ The [Amazon Elastic Block Store](https://aws.amazon.com/ebs/) Container Storage 
 * **NVMe Volumes** - Consume [NVMe](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/nvme-ebs-volumes.html) volumes from EC2 [Nitro instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html#ec2-nitro-instances).
 * **Block Volumes** - Consume an EBS volume as a [raw block device](https://kubernetes-csi.github.io/docs/raw-block.html).
 * **Volume Snapshots** - Create and restore [snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) taken from a volume in Kubernetes.
-* **Volume Resizing** - Expand the volume (both offline and online) by specifying a new size in the [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#expanding-persistent-volumes-claims) (PVC).
+* **Volume Resizing** - Expand the volume by specifying a new size in the [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#expanding-persistent-volumes-claims) (PVC).
 
 ## Container Images
 
 | Driver Version | [registry.k8s.io](https://kubernetes.io/blog/2022/11/28/registry-k8s-io-faster-cheaper-ga/) Image | [ECR Public](https://gallery.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver) Image |
 |----------------|---------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| v1.17.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.17.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.17.0                      |
+| v1.24.1        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.24.1                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.24.1                      |
 
 <details>
 <summary>Previous Images</summary>
 
 | Driver Version | [registry.k8s.io](https://kubernetes.io/blog/2022/11/28/registry-k8s-io-faster-cheaper-ga/) Image | [ECR Public](https://gallery.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver) Image |
 |----------------|---------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| v1.24.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.24.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.24.0                      |
+| v1.23.2        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.23.2                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.23.2                      |
+| v1.23.1        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.23.1                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.23.1                      |
+| v1.23.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.23.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.23.0                      |
+| v1.22.1        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.22.1                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.22.1                      |
+| v1.22.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.22.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.22.0                      |
+| v1.21.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.21.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.21.0                      |
+| v1.20.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.20.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.20.0                      |
+| v1.19.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.19.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.19.0                      |
+| v1.18.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.18.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.18.0                      |
+| v1.17.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.17.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.17.0                      |
 | v1.16.1        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.16.1                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.16.1                      |
 | v1.16.0        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.16.0                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.16.0                      |
 | v1.15.1        | registry.k8s.io/provider-aws/aws-ebs-csi-driver:v1.15.1                                           | public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.15.1                      |
@@ -84,5 +88,7 @@ The EBS CSI Driver is compatible with Kubernetes versions v1.17+ and implements 
 * [Driver Launch Options](docs/options.md)
 * [StorageClass Parameters](docs/parameters.md)
 * [Volume Tagging](docs/tagging.md)
+* [Volume Modification](docs/modify-volume.md)
 * [Kubernetes Examples](/examples/kubernetes)
+* [Driver Uninstallation](docs/install.md#uninstalling-the-ebs-csi-driver)
 * [Development and Contributing](CONTRIBUTING.md)
