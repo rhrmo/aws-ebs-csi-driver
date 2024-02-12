@@ -27,7 +27,7 @@ undefine KUBERNETES_SERVICE_PORT_HTTPS
 # Carry: VERSION is set by CI to go version, not CSI driver version
 undefine VERSION
 
-VERSION?=v1.25.0
+VERSION?=v1.26.1
 
 PKG=github.com/kubernetes-sigs/aws-ebs-csi-driver
 GIT_COMMIT?=$(shell git rev-parse HEAD)
@@ -143,7 +143,7 @@ bin/mockgen: | bin
 
 bin/golangci-lint: | bin
 	echo "Installing golangci-lint..."
-	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v1.51.2
+	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v1.54.0
 
 .PHONY: kubeval
 kubeval: bin/kubeval
@@ -165,14 +165,13 @@ test:
 
 .PHONY: test-sanity
 test-sanity:
-	#go test -v ./tests/sanity/...
-	echo "succeed"
+	go test -v -race ./tests/sanity/...
 
 .PHONY: test-e2e-single-az
 test-e2e-single-az:
 	AWS_REGION=us-west-2 \
 	AWS_AVAILABILITY_ZONES=us-west-2a \
-	HELM_EXTRA_FLAGS='--set=controller.k8sTagClusterId=$$CLUSTER_NAME' \
+	HELM_EXTRA_FLAGS='--set=controller.k8sTagClusterId=$$CLUSTER_NAME,controller.volumeModificationFeature.enabled=true' \
 	EBS_INSTALL_SNAPSHOT="true" \
 	TEST_PATH=./tests/e2e/... \
 	GINKGO_FOCUS="\[ebs-csi-e2e\] \[single-az\]" \
@@ -297,3 +296,14 @@ generate-kustomize: bin/helm
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/serviceaccount-csi-node.yaml | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/serviceaccount-csi-node.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/role-leases.yaml | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/role-leases.yaml
 	cd charts/aws-ebs-csi-driver && ../../bin/helm template kustomize . -s templates/rolebinding-leases.yaml | sed -e "/namespace: /d" > ../../deploy/kubernetes/base/rolebinding-leases.yaml
+
+.PHONY: update-truth-sidecars
+update-truth-sidecars: hack/release-scripts/get-latest-sidecar-images
+	./hack/release-scripts/get-latest-sidecar-images
+
+.PHONY: generate-sidecar-tags
+generate-sidecar-tags: update-truth-sidecars charts/aws-ebs-csi-driver/values.yaml deploy/kubernetes/overlays/stable/gcr/kustomization.yaml hack/release-scripts/generate-sidecar-tags
+	./hack/release-scripts/generate-sidecar-tags
+
+.PHONY: update-sidecar-dependencies
+update-sidecar-dependencies: update-truth-sidecars generate-sidecar-tags generate-kustomize
