@@ -790,7 +790,7 @@ func (d *NodeService) getVolumesLimit() int64 {
 		availableAttachments = dedicatedLimit
 	} else if isNitro {
 		enis := d.metadata.GetNumAttachedENIs()
-		nvmeInstanceStoreVolumes := cloud.GetNVMeInstanceStoreVolumesForInstanceType(instanceType)
+		nvmeInstanceStoreVolumes := cloud.GetReservedSlotsForInstanceType(instanceType)
 		availableAttachments = availableAttachments - enis - nvmeInstanceStoreVolumes
 	}
 	availableAttachments = availableAttachments - reservedVolumeAttachments
