@@ -19,7 +19,7 @@ import (
 	"strings"
 )
 
-// / https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html#ec2-nitro-instances
+// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html#ec2-nitro-instances
 const (
 	highMemoryMetalInstancesMaxVolumes   = 19
 	highMemoryVirtualInstancesMaxVolumes = 27
@@ -51,7 +51,7 @@ func init() {
 
 var dedicatedVolumeLimits = map[string]int{}
 
-// / List of nitro instance types can be found here: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html#ec2-nitro-instances
+// List of nitro instance types can be found here: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html#ec2-nitro-instances
 var nonNitroInstanceFamilies = map[string]struct{}{
 	"t2":  {},
 	"c3":  {},
@@ -67,6 +67,7 @@ var nonNitroInstanceFamilies = map[string]struct{}{
 	"g3":  {},
 	"d2":  {},
 	"h1":  {},
+	"f1":  {},
 }
 
 func IsNitroInstanceType(it string) bool {
@@ -88,8 +89,8 @@ func GetMaxAttachments(nitro bool) int {
 	return nonNitroMaxAttachments
 }
 
-// / Some instance types have a maximum limit of EBS volumes
-// / https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/volume_limits.html
+// Some instance types have a maximum limit of EBS volumes
+// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/volume_limits.html
 var maxVolumeLimits = map[string]int{
 	"d3.8xlarge":    3,
 	"d3en.12xlarge": 3,
@@ -138,16 +139,27 @@ func GetDedicatedLimitForInstanceType(it string) int {
 	}
 }
 
-func GetNVMeInstanceStoreVolumesForInstanceType(it string) int {
-	if v, ok := nvmeInstanceStoreVolumes[it]; ok {
-		return v
+// GetReservedSlotsForInstanceType calculates how many attachment slots are already used up by other devices on shared EBS volume limit instances.
+func GetReservedSlotsForInstanceType(it string) int {
+	total := 0
+	nvmeInstanceStoreVolumes, ok := nvmeInstanceStoreVolumes[it]
+	if ok {
+		total += nvmeInstanceStoreVolumes
 	}
-	return 0
+	gpus, ok := gpuInstanceGpus[it]
+	if ok {
+		total += gpus
+	}
+	acceleratorSlots, ok := acceleratorSlotsTaken[it]
+	if ok {
+		total += acceleratorSlots
+	}
+	return total
 }
 
-// / https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-store-volumes.html
-// / IMDS does not provide NVMe instance store data; we'll just list all instances here
-// / TODO: See if we can get these values from DescribeInstanceTypes API
+// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-store-volumes.html
+// IMDS does not provide NVMe instance store data; we'll just list all instances here
+// g5.48xlarge is not added to this table as it is in the maxVolumeLimits
 var nvmeInstanceStoreVolumes = map[string]int{
 	"c1.medium":       1,
 	"c1.xlarge":       4,
@@ -235,7 +247,6 @@ var nvmeInstanceStoreVolumes = map[string]int{
 	"g5.16xlarge":     1,
 	"g5.24xlarge":     1,
 	"g5.2xlarge":      1,
-	"g5.48xlarge":     2,
 	"g5.4xlarge":      1,
 	"g5.8xlarge":      1,
 	"g5.xlarge":       1,
@@ -488,4 +499,78 @@ var nvmeInstanceStoreVolumes = map[string]int{
 	"z1d.large":       1,
 	"z1d.metal":       2,
 	"z1d.xlarge":      1,
+}
+
+// https://aws.amazon.com/ec2/instance-types
+// Despite the dl1.24xlarge having Gaudi Accelerators describe instance types considers them GPUs as such that instacne type is in this table
+// g5.48xlarge is not added to this table as it is in the maxVolumeLimits
+var gpuInstanceGpus = map[string]int{
+	"dl1.24xlarge":  8,
+	"g3.16xlarge":   4,
+	"g3.4xlarge":    1,
+	"g3.8xlarge":    2,
+	"g3s.xlarge":    1,
+	"g4ad.16xlarge": 4,
+	"g4ad.2xlarge":  1,
+	"g4ad.4xlarge":  1,
+	"g4ad.8xlarge":  2,
+	"g4ad.xlarge":   1,
+	"g4dn.12xlarge": 4,
+	"g4dn.16xlarge": 1,
+	"g4dn.2xlarge":  1,
+	"g4dn.4xlarge":  1,
+	"g4dn.8xlarge":  1,
+	"g4dn.metal":    8,
+	"g4dn.xlarge":   1,
+	"g5.12xlarge":   4,
+	"g5.16xlarge":   1,
+	"g5.24xlarge":   4,
+	"g5.2xlarge":    1,
+	"g5.4xlarge":    1,
+	"g5.8xlarge":    1,
+	"g5g.16xlarge":  2,
+	"g5g.2xlarge":   1,
+	"g5g.4xlarge":   1,
+	"g5g.8xlarge":   1,
+	"g5g.metal":     2,
+	"g5g.xlarge":    1,
+	"g5.xlarge":     1,
+	"g6.12xlarge":   4,
+	"g6.16xlarge":   1,
+	"g6.24xlarge":   4,
+	"g6.2xlarge":    1,
+	"g6.48xlarge":   8,
+	"g6.4xlarge":    1,
+	"g6.8xlarge":    1,
+	"g6.xlarge":     1,
+	"gr6.4xlarge":   1,
+	"gr6.8xlarge":   1,
+	"p2.16xlarge":   16,
+	"p2.8xlarge":    8,
+	"p2.xlarge":     1,
+	"p3.16xlarge":   8,
+	"p3.2xlarge":    1,
+	"p3.8xlarge":    4,
+	"p3dn.24xlarge": 8,
+	"p4d.24xlarge":  8,
+	"p4de.24xlarge": 8,
+	"p5.48xlarge":   8,
+}
+
+// Note this table is not a reflection of how many accelerators an instance has but of how many slots their combined acclerators take up
+// VT instance type accelerators take two slots each with the exception of the vt1.24xlarge which takes 0 slots for its accelerators
+// inf1 instance types are purposely not added to this table as they are in the maxVolumeLimits table
+// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/volume_limits.html
+var acceleratorSlotsTaken = map[string]int{
+	"vt1.3xlarge":    2,
+	"vt1.6xlarge":    4,
+	"vt1.24xlarge":   0,
+	"dl2q.24xlarge":  8,
+	"inf2.xlarge":    1,
+	"inf2.8xlarge":   1,
+	"inf2.24xlarge":  6,
+	"inf2.48xlarge":  12,
+	"trn1.2xlarge":   1,
+	"trn1.32xlarge":  16,
+	"trn1n.32xlarge": 16,
 }
