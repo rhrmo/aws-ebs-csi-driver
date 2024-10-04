@@ -31,15 +31,15 @@ const (
 func init() {
 	// This list of Nitro instance types have a dedicated Amazon EBS volume limit of up to 128 attachments, depending on instance size.
 	// The limit is not shared with other device attachments: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/volume_limits.html#nitro-system-limits
-	instanceFamilies := []string{"m7i", "m7i-flex", "m7a", "c7i", "c7a", "r7a", "r7i", "r7iz", "u7i"}
+	instanceFamilies := []string{"m7i", "m7i-flex", "m7a", "c7i", "c7i-flex", "c7a", "r7a", "r7i", "r7iz", "r8g", "u7i", "g6", "gr6"}
 	commonInstanceSizes := []string{"medium", "large", "xlarge", "2xlarge", "4xlarge", "8xlarge", "12xlarge"}
 
 	for _, family := range instanceFamilies {
 		for _, size := range commonInstanceSizes {
 			dedicatedVolumeLimits[family+"."+size] = 32
 		}
-		dedicatedVolumeLimits[family+".metal-16xl"] = 31
-		dedicatedVolumeLimits[family+".metal-24xl"] = 31
+		dedicatedVolumeLimits[family+".metal-16xl"] = 39
+		dedicatedVolumeLimits[family+".metal-24xl"] = 39
 		dedicatedVolumeLimits[family+".16xlarge"] = 48
 		dedicatedVolumeLimits[family+".24xlarge"] = 64
 		dedicatedVolumeLimits[family+".metal-32xl"] = 79
@@ -502,7 +502,7 @@ var nvmeInstanceStoreVolumes = map[string]int{
 }
 
 // https://aws.amazon.com/ec2/instance-types
-// Despite the dl1.24xlarge having Gaudi Accelerators describe instance types considers them GPUs as such that instacne type is in this table
+// Despite the dl1.24xlarge having Gaudi Accelerators describe instance types considers them GPUs as such that instance type is in this table
 // g5.48xlarge is not added to this table as it is in the maxVolumeLimits
 var gpuInstanceGpus = map[string]int{
 	"dl1.24xlarge":  8,
@@ -557,7 +557,7 @@ var gpuInstanceGpus = map[string]int{
 	"p5.48xlarge":   8,
 }
 
-// Note this table is not a reflection of how many accelerators an instance has but of how many slots their combined acclerators take up
+// Note this table is not a reflection of how many accelerators an instance has but of how many slots their combined accelerators take up
 // VT instance type accelerators take two slots each with the exception of the vt1.24xlarge which takes 0 slots for its accelerators
 // inf1 instance types are purposely not added to this table as they are in the maxVolumeLimits table
 // https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/volume_limits.html

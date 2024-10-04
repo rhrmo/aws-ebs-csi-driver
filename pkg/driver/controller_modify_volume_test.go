@@ -25,26 +25,128 @@ import (
 )
 
 const (
-	validType          = "gp3"
-	validIops          = "2000"
-	validIopsInt       = 2000
-	validThroughput    = "500"
-	validThroughputInt = 500
-	invalidIops        = "123.546"
-	invalidThroughput  = "one hundred"
+	validType                   = "gp3"
+	validIops                   = "2000"
+	validIopsInt                = 2000
+	validThroughput             = "500"
+	validThroughputInt          = 500
+	invalidIops                 = "123.546"
+	invalidThroughput           = "one hundred"
+	validTagSpecificationInput  = "key1=tag1"
+	tagSpecificationWithNoValue = "key3="
+	tagSpecificationWithNoEqual = "key1"
+	validTagDeletion            = "key2"
+	invalidTagSpecification     = "aws:test=TEST"
+	invalidParameter            = "invalid_parameter"
 )
+
+func TestMergeModifyVolumeRequest(t *testing.T) {
+	testCases := []struct {
+		name                        string
+		input                       modifyVolumeRequest
+		existing                    modifyVolumeRequest
+		expectedModifyVolumeRequest modifyVolumeRequest
+		expectError                 bool
+	}{
+		{
+			name: "Valid merge of size and iops",
+			input: modifyVolumeRequest{
+				newSize: 5,
+			},
+			existing: modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					IOPS: validIopsInt,
+				},
+			},
+			expectedModifyVolumeRequest: modifyVolumeRequest{
+				newSize: 5,
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					IOPS: validIopsInt,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "Different size requested by a previous request",
+			input: modifyVolumeRequest{
+				newSize: 4,
+			},
+			existing: modifyVolumeRequest{
+				newSize: 5,
+			},
+			expectedModifyVolumeRequest: modifyVolumeRequest{
+				newSize: 5,
+			},
+			expectError: true,
+		},
+		{
+			name: "Different IOPS requested by previous request",
+			input: modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					IOPS: validIopsInt,
+				},
+			},
+			existing: modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					IOPS: validIopsInt - 1,
+				},
+			},
+			expectedModifyVolumeRequest: modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					IOPS: validIopsInt - 1,
+				},
+			},
+			expectError: true,
+		},
+		{
+			name: "Different Throughput requested by previous request",
+			input: modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					Throughput: validThroughputInt,
+				},
+			},
+			existing: modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					Throughput: validThroughputInt - 1,
+				},
+			},
+			expectedModifyVolumeRequest: modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					Throughput: validThroughputInt - 1,
+				},
+			},
+			expectError: true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := mergeModifyVolumeRequest(tc.input, tc.existing)
+			assert.Equal(t, tc.expectedModifyVolumeRequest, result)
+			if tc.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
 
 func TestParseModifyVolumeParameters(t *testing.T) {
 	testCases := []struct {
 		name            string
 		params          map[string]string
-		expectedOptions *cloud.ModifyDiskOptions
+		expectedOptions *modifyVolumeRequest
 		expectError     bool
 	}{
 		{
-			name:            "blank params",
-			params:          map[string]string{},
-			expectedOptions: &cloud.ModifyDiskOptions{},
+			name:   "blank params",
+			params: map[string]string{},
+			expectedOptions: &modifyVolumeRequest{
+				modifyTagsOptions: cloud.ModifyTagsOptions{
+					TagsToAdd:    map[string]string{},
+					TagsToDelete: []string{},
+				},
+			},
 		},
 		{
 			name: "basic params",
@@ -52,21 +154,46 @@ func TestParseModifyVolumeParameters(t *testing.T) {
 				ModificationKeyVolumeType: validType,
 				ModificationKeyIOPS:       validIops,
 				ModificationKeyThroughput: validThroughput,
+				ModificationAddTag:        validTagSpecificationInput,
+				ModificationDeleteTag:     validTagDeletion,
 			},
-			expectedOptions: &cloud.ModifyDiskOptions{
-				VolumeType: validType,
-				IOPS:       validIopsInt,
-				Throughput: validThroughputInt,
+			expectedOptions: &modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					VolumeType: validType,
+					IOPS:       validIopsInt,
+					Throughput: validThroughputInt,
+				},
+				modifyTagsOptions: cloud.ModifyTagsOptions{
+					TagsToAdd: map[string]string{
+						"key1": "tag1",
+					},
+					TagsToDelete: []string{
+						"key2",
+					},
+				},
 			},
 		},
 		{
-			name: "deprecated type",
+			name: "tag specification with inproper length",
+			params: map[string]string{
+				ModificationAddTag: tagSpecificationWithNoEqual,
+			},
+			expectError: true,
+		},
+		{
+			name: "deprecated type but has validType",
 			params: map[string]string{
 				ModificationKeyVolumeType:           validType,
 				DeprecatedModificationKeyVolumeType: "deprecated" + validType,
 			},
-			expectedOptions: &cloud.ModifyDiskOptions{
-				VolumeType: validType,
+			expectedOptions: &modifyVolumeRequest{
+				modifyDiskOptions: cloud.ModifyDiskOptions{
+					VolumeType: validType,
+				},
+				modifyTagsOptions: cloud.ModifyTagsOptions{
+					TagsToAdd:    map[string]string{},
+					TagsToDelete: []string{},
+				},
 			},
 		},
 		{
@@ -80,6 +207,20 @@ func TestParseModifyVolumeParameters(t *testing.T) {
 			name: "invalid throughput",
 			params: map[string]string{
 				ModificationKeyThroughput: invalidThroughput,
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid tag specification",
+			params: map[string]string{
+				ModificationAddTag: invalidTagSpecification,
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid VAC parameter",
+			params: map[string]string{
+				invalidParameter: "20",
 			},
 			expectError: true,
 		},

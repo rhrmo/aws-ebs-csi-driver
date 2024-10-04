@@ -37,52 +37,72 @@ var (
 	modifyVolumeTests = map[string]testsuites.ModifyVolumeTest{
 		"with a new iops annotation": {
 			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
-			ModifyVolumeAnnotations: map[string]string{
-				testsuites.AnnotationIops: "4000",
+			ModifyVolumeParameters: map[string]string{
+				testsuites.Iops: "4000",
 			},
 			ShouldResizeVolume:                    false,
 			ShouldTestInvalidModificationRecovery: false,
 		},
 		"with a new io2 volumeType annotation": {
 			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
-			ModifyVolumeAnnotations: map[string]string{
-				testsuites.AnnotationVolumeType: awscloud.VolumeTypeIO2,
-				testsuites.AnnotationIops:       testsuites.DefaultIopsIoVolumes, // As of aws-ebs-csi-driver v1.25.0, parameter iops must be re-specified when modifying volumeType io2 volumes.
+			ModifyVolumeParameters: map[string]string{
+				testsuites.VolumeType: awscloud.VolumeTypeIO2,
+				testsuites.Iops:       testsuites.DefaultIopsIoVolumes, // As of aws-ebs-csi-driver v1.25.0, parameter iops must be re-specified when modifying volumeType io2 volumes.
 			},
 			ShouldResizeVolume:                    false,
 			ShouldTestInvalidModificationRecovery: false,
 		},
 		"with a new throughput annotation": {
 			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
-			ModifyVolumeAnnotations: map[string]string{
-				testsuites.AnnotationThroughput: "150",
+			ModifyVolumeParameters: map[string]string{
+				testsuites.Throughput: "150",
 			},
 			ShouldResizeVolume:                    false,
 			ShouldTestInvalidModificationRecovery: false,
 		},
-		"with new throughput and iops annotations": {
+		"with a new tag annotation": {
 			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
-			ModifyVolumeAnnotations: map[string]string{
-				testsuites.AnnotationIops:       "4000",
-				testsuites.AnnotationThroughput: "150",
+			ModifyVolumeParameters: map[string]string{
+				testsuites.TagSpec: "key1=test1",
 			},
 			ShouldResizeVolume:                    false,
 			ShouldTestInvalidModificationRecovery: false,
+			ExternalResizerOnly:                   true,
+		},
+		"with new throughput, and iops annotations": {
+			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
+			ModifyVolumeParameters: map[string]string{
+				testsuites.Iops:       "4000",
+				testsuites.Throughput: "150",
+			},
+			ShouldResizeVolume:                    false,
+			ShouldTestInvalidModificationRecovery: false,
+		},
+		"with new throughput, iops, and tag annotations": {
+			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
+			ModifyVolumeParameters: map[string]string{
+				testsuites.Iops:       "4000",
+				testsuites.Throughput: "150",
+				testsuites.TagSpec:    "key2=test2",
+			},
+			ShouldResizeVolume:                    false,
+			ShouldTestInvalidModificationRecovery: false,
+			ExternalResizerOnly:                   true,
 		},
 		"with a larger size and new throughput and iops annotations": {
 			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
-			ModifyVolumeAnnotations: map[string]string{
-				testsuites.AnnotationIops:       "4000",
-				testsuites.AnnotationThroughput: "150",
+			ModifyVolumeParameters: map[string]string{
+				testsuites.Iops:       "4000",
+				testsuites.Throughput: "150",
 			},
 			ShouldResizeVolume:                    true,
 			ShouldTestInvalidModificationRecovery: false,
 		},
 		"with a larger size and new throughput and iops annotations after providing an invalid annotation": {
 			CreateVolumeParameters: defaultModifyVolumeTestGp3CreateVolumeParameters,
-			ModifyVolumeAnnotations: map[string]string{
-				testsuites.AnnotationIops:       "4000",
-				testsuites.AnnotationThroughput: "150",
+			ModifyVolumeParameters: map[string]string{
+				testsuites.Iops:       "4000",
+				testsuites.Throughput: "150",
 			},
 			ShouldResizeVolume:                    true,
 			ShouldTestInvalidModificationRecovery: true,
@@ -93,10 +113,10 @@ var (
 				ebscsidriver.FSTypeKey:     ebscsidriver.FSTypeExt4,
 				ebscsidriver.IopsKey:       testsuites.DefaultIopsIoVolumes,
 			},
-			ModifyVolumeAnnotations: map[string]string{
-				testsuites.AnnotationVolumeType: awscloud.VolumeTypeGP3,
-				testsuites.AnnotationIops:       "4000",
-				testsuites.AnnotationThroughput: "150",
+			ModifyVolumeParameters: map[string]string{
+				testsuites.VolumeType: awscloud.VolumeTypeGP3,
+				testsuites.Iops:       "4000",
+				testsuites.Throughput: "150",
 			},
 			ShouldResizeVolume:                    true,
 			ShouldTestInvalidModificationRecovery: false,
@@ -124,6 +144,9 @@ var _ = Describe("[ebs-csi-e2e] [single-az] [modify-volume] Modifying a PVC", fu
 		modifyVolumeTest := modifyVolumeTest
 		Context(testName, func() {
 			It("will modify associated PV and EBS Volume via volume-modifier-for-k8s", func() {
+				if modifyVolumeTest.ExternalResizerOnly {
+					Skip("Functionality being tested is not supported for Modification via volume-modifier-for-k8s, skipping test")
+				}
 				modifyVolumeTest.Run(cs, ns, ebsDriver, testsuites.VolumeModifierForK8s)
 			})
 			It("will modify associated PV and EBS Volume via external-resizer", func() {

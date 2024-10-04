@@ -20,12 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	dm "github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/cloud/devicemanager"
+	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/expiringcache"
 	"github.com/kubernetes-sigs/aws-ebs-csi-driver/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,7 +82,47 @@ func extractVolumeIdentifiers(volumes []types.Volume) (volumeIDs []string, volum
 	}
 	return volumeIDs, volumeNames
 }
+func TestNewCloud(t *testing.T) {
 
+	testCases := []struct {
+		name            string
+		region          string
+		awsSdkDebugLog  bool
+		userAgentExtra  string
+		batchingEnabled bool
+	}{
+		{
+			name:            "success: with awsSdkDebugLog, userAgentExtra, and batchingEnabled",
+			region:          "us-east-1",
+			awsSdkDebugLog:  true,
+			userAgentExtra:  "example_user_agent_extra",
+			batchingEnabled: true,
+		},
+		{
+			name:           "success: with only awsSdkDebugLog, and userAgentExtra",
+			region:         "us-east-1",
+			awsSdkDebugLog: true,
+			userAgentExtra: "example_user_agent_extra",
+		},
+		{
+			name:   "success: with only region",
+			region: "us-east-1",
+		},
+	}
+	for _, tc := range testCases {
+		ec2Cloud, err := NewCloud(tc.region, tc.awsSdkDebugLog, tc.userAgentExtra, tc.batchingEnabled)
+		if err != nil {
+			t.Fatalf("error %v", err)
+		}
+		ec2CloudAscloud := ec2Cloud.(*cloud)
+		assert.Equal(t, ec2CloudAscloud.region, tc.region)
+		if tc.batchingEnabled {
+			assert.NotNil(t, ec2CloudAscloud.bm)
+		} else {
+			assert.Nil(t, ec2CloudAscloud.bm)
+		}
+	}
+}
 func TestBatchDescribeVolumes(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -547,6 +589,101 @@ func executeDescribeSnapshotsTest(t *testing.T, c *cloud, snapshotIDs, snapshotN
 			}
 		default:
 			t.Errorf("Did not receive a result or an error for a request")
+		}
+	}
+}
+
+func TestCheckDesiredState(t *testing.T) {
+	testCases := []struct {
+		name           string
+		volumeId       string
+		desiredSizeGiB int32
+		options        *ModifyDiskOptions
+		expErr         error
+	}{
+		{
+			name:           "sucess: normal path",
+			volumeId:       "vol-001",
+			desiredSizeGiB: 5,
+			options: &ModifyDiskOptions{
+				VolumeType: VolumeTypeGP2,
+				IOPS:       3000,
+				Throughput: 1000,
+			},
+		},
+		{
+			name:           "failure: volume is still being expanded",
+			volumeId:       "vol-001",
+			desiredSizeGiB: 500,
+			options: &ModifyDiskOptions{
+				VolumeType: VolumeTypeGP2,
+				IOPS:       3000,
+				Throughput: 1000,
+			},
+			expErr: fmt.Errorf("volume \"vol-001\" is still being expanded to 500 size"),
+		},
+		{
+			name:           "failure: volume is still being modified to iops",
+			volumeId:       "vol-001",
+			desiredSizeGiB: 50,
+			options: &ModifyDiskOptions{
+				VolumeType: VolumeTypeGP2,
+				IOPS:       4000,
+				Throughput: 1000,
+			},
+			expErr: fmt.Errorf("volume \"vol-001\" is still being modified to iops 4000"),
+		},
+		{
+			name:           "failure: volume is still being modifed to type",
+			volumeId:       "vol-001",
+			desiredSizeGiB: 50,
+			options: &ModifyDiskOptions{
+				VolumeType: VolumeTypeGP3,
+				IOPS:       3000,
+				Throughput: 1000,
+			},
+			expErr: fmt.Errorf("volume \"vol-001\" is still being modified to type %q", VolumeTypeGP3),
+		},
+		{
+			name:           "failure: volume is still being modified to throughput",
+			volumeId:       "vol-001",
+			desiredSizeGiB: 5,
+			options: &ModifyDiskOptions{
+				VolumeType: VolumeTypeGP2,
+				IOPS:       3000,
+				Throughput: 2000,
+			},
+			expErr: fmt.Errorf("volume \"vol-001\" is still being modified to throughput 2000"),
+		},
+	}
+	for _, tc := range testCases {
+		mockCtrl := gomock.NewController(t)
+		defer mockCtrl.Finish()
+		mockEC2 := NewMockEC2API(mockCtrl)
+		c := newCloud(mockEC2)
+		cloudInstance := c.(*cloud)
+		mockEC2.EXPECT().DescribeVolumes(gomock.Any(), gomock.Any()).Return(&ec2.DescribeVolumesOutput{
+			Volumes: []types.Volume{
+				{
+					VolumeId:   aws.String("vol-001"),
+					Size:       aws.Int32(50),
+					VolumeType: types.VolumeTypeGp2,
+					Iops:       aws.Int32(3000),
+					Throughput: aws.Int32(1000),
+				},
+			},
+		}, nil)
+		_, err := cloudInstance.checkDesiredState(context.Background(), tc.volumeId, tc.desiredSizeGiB, tc.options)
+		if err != nil {
+			if tc.expErr == nil {
+				t.Fatalf("Did not expect to get an error but got %q", err)
+			} else if tc.expErr.Error() != err.Error() {
+				t.Fatalf("checkDesiredState() failed: expected error %q, got: %q", tc.expErr, err)
+			}
+		} else {
+			if tc.expErr != nil {
+				t.Fatalf("checkDesiredState() failed: expected error got nothing")
+			}
 		}
 	}
 }
@@ -1195,6 +1332,21 @@ func TestCreateDisk(t *testing.T) {
 			},
 			expErr: fmt.Errorf("CreateDisk: multi-attach is only supported for io2 volumes"),
 		},
+		{
+			name:       "failure: invalid VolumeType",
+			volumeName: "vol-test-name",
+			diskOptions: &DiskOptions{
+				CapacityBytes: util.GiBToBytes(1),
+				Tags:          map[string]string{VolumeNameTagKey: "vol-test", AwsEbsDriverTagKey: "true"},
+				VolumeType:    "invalidVolumeType",
+			},
+			expDisk: &Disk{
+				VolumeID:         "vol-test",
+				CapacityGiB:      1,
+				AvailabilityZone: defaultZone,
+			},
+			expErr: fmt.Errorf("invalid AWS VolumeType %q", "invalidVolumeType"),
+		},
 	}
 	for _, tc := range testCases {
 		tc := tc
@@ -1280,6 +1432,72 @@ func TestCreateDisk(t *testing.T) {
 	}
 }
 
+// Test client error IdempotentParameterMismatch by forcing it to progress twice
+func TestCreateDiskClientToken(t *testing.T) {
+	t.Parallel()
+
+	const volumeName = "test-vol-client-token"
+	const volumeId = "vol-abcd1234"
+	diskOptions := &DiskOptions{
+		CapacityBytes:    util.GiBToBytes(1),
+		Tags:             map[string]string{VolumeNameTagKey: volumeName, AwsEbsDriverTagKey: "true"},
+		AvailabilityZone: defaultZone,
+	}
+
+	// Hash of "test-vol-client-token"
+	const expectedClientToken1 = "6a1b29bd7c5c5541d9d6baa2938e954fc5739dc77e97facf23590bd13f8582c2"
+	// Hash of "test-vol-client-token-2"
+	const expectedClientToken2 = "21465f5586388bb8804d0cec2df13c00f9a975c8cddec4bc35e964cdce59015b"
+	// Hash of "test-vol-client-token-3"
+	const expectedClientToken3 = "1bee5a79d83981c0041df2c414bb02e0c10aeb49343b63f50f71470edbaa736b"
+
+	mockCtrl := gomock.NewController(t)
+	mockEC2 := NewMockEC2API(mockCtrl)
+	c := newCloud(mockEC2)
+
+	gomock.InOrder(
+		mockEC2.EXPECT().CreateVolume(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, input *ec2.CreateVolumeInput, _ ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error) {
+				assert.Equal(t, expectedClientToken1, *input.ClientToken)
+				return nil, &smithy.GenericAPIError{Code: "IdempotentParameterMismatch"}
+			}),
+		mockEC2.EXPECT().CreateVolume(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, input *ec2.CreateVolumeInput, _ ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error) {
+				assert.Equal(t, expectedClientToken2, *input.ClientToken)
+				return nil, &smithy.GenericAPIError{Code: "IdempotentParameterMismatch"}
+			}),
+		mockEC2.EXPECT().CreateVolume(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, input *ec2.CreateVolumeInput, _ ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error) {
+				assert.Equal(t, expectedClientToken3, *input.ClientToken)
+				return &ec2.CreateVolumeOutput{
+					VolumeId: aws.String(volumeId),
+					Size:     aws.Int32(util.BytesToGiB(diskOptions.CapacityBytes)),
+				}, nil
+			}),
+		mockEC2.EXPECT().DescribeVolumes(gomock.Any(), gomock.Any()).Return(&ec2.DescribeVolumesOutput{
+			Volumes: []types.Volume{
+				{
+					VolumeId:         aws.String(volumeId),
+					Size:             aws.Int32(util.BytesToGiB(diskOptions.CapacityBytes)),
+					State:            types.VolumeState("available"),
+					AvailabilityZone: aws.String(diskOptions.AvailabilityZone),
+				},
+			},
+		}, nil).AnyTimes(),
+	)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(defaultCreateDiskDeadline))
+	defer cancel()
+	for i := range 3 {
+		_, err := c.CreateDisk(ctx, volumeName, diskOptions)
+		if i < 2 {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
+		}
+	}
+}
+
 func TestDeleteDisk(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -1341,14 +1559,13 @@ func TestAttachDisk(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name         string
-		volumeID     string
-		nodeID       string
-		nodeID2      string
-		path         string
-		expErr       error
-		mockFunc     func(*MockEC2API, context.Context, string, string, string, string, dm.DeviceManager)
-		validateFunc func(t *testing.T)
+		name     string
+		volumeID string
+		nodeID   string
+		nodeID2  string
+		path     string
+		expErr   error
+		mockFunc func(*MockEC2API, context.Context, string, string, string, string, dm.DeviceManager)
 	}{
 		{
 			name:     "success: AttachVolume normal",
@@ -1377,16 +1594,23 @@ func TestAttachDisk(t *testing.T) {
 			name:     "success: AttachVolume skip likely bad name",
 			volumeID: defaultVolumeID,
 			nodeID:   defaultNodeID,
+			nodeID2:  defaultNodeID, // Induce second attach
 			path:     "/dev/xvdab",
-			expErr:   nil,
+			expErr:   fmt.Errorf("could not attach volume %q to node %q: %w", defaultVolumeID, defaultNodeID, blockDeviceInUseErr),
 			mockFunc: func(mockEC2 *MockEC2API, ctx context.Context, volumeID, nodeID, nodeID2, path string, dm dm.DeviceManager) {
 				volumeRequest := createVolumeRequest(volumeID)
 				instanceRequest := createInstanceRequest(nodeID)
-				attachRequest := createAttachRequest(volumeID, nodeID, path)
+				attachRequest1 := createAttachRequest(volumeID, nodeID, defaultPath)
+				attachRequest2 := createAttachRequest(volumeID, nodeID, path)
 
 				gomock.InOrder(
+					// First call - fail with "already in use" error
 					mockEC2.EXPECT().DescribeInstances(gomock.Any(), gomock.Eq(instanceRequest)).Return(newDescribeInstancesOutput(nodeID), nil),
-					mockEC2.EXPECT().AttachVolume(gomock.Any(), gomock.Eq(attachRequest), gomock.Any()).Return(&ec2.AttachVolumeOutput{
+					mockEC2.EXPECT().AttachVolume(gomock.Any(), gomock.Eq(attachRequest1), gomock.Any()).Return(nil, blockDeviceInUseErr),
+
+					// Second call - succeed, expect bad device name to be skipped
+					mockEC2.EXPECT().DescribeInstances(gomock.Any(), gomock.Eq(instanceRequest)).Return(newDescribeInstancesOutput(nodeID), nil),
+					mockEC2.EXPECT().AttachVolume(gomock.Any(), gomock.Eq(attachRequest2), gomock.Any()).Return(&ec2.AttachVolumeOutput{
 						Device:     aws.String(path),
 						InstanceId: aws.String(nodeID),
 						VolumeId:   aws.String(volumeID),
@@ -1394,15 +1618,6 @@ func TestAttachDisk(t *testing.T) {
 					}, nil),
 					mockEC2.EXPECT().DescribeVolumes(gomock.Any(), volumeRequest).Return(createDescribeVolumesOutput([]*string{&volumeID}, nodeID, path, "attached"), nil),
 				)
-
-				nodeDeviceCache = map[string]cachedNode{
-					defaultNodeID: {
-						timer: time.NewTimer(1 * time.Hour),
-						likelyBadNames: map[string]struct{}{
-							defaultPath: {},
-						},
-					},
-				}
 			},
 		},
 		{
@@ -1416,7 +1631,7 @@ func TestAttachDisk(t *testing.T) {
 				instanceRequest := createInstanceRequest(nodeID)
 
 				fakeInstance := newFakeInstance(nodeID, volumeID, path)
-				_, err := dm.NewDevice(&fakeInstance, volumeID, map[string]struct{}{})
+				_, err := dm.NewDevice(&fakeInstance, volumeID, new(sync.Map))
 				require.NoError(t, err)
 
 				gomock.InOrder(
@@ -1439,9 +1654,6 @@ func TestAttachDisk(t *testing.T) {
 					mockEC2.EXPECT().AttachVolume(gomock.Any(), attachRequest, gomock.Any()).Return(nil, errors.New("AttachVolume error")),
 				)
 			},
-			validateFunc: func(t *testing.T) {
-				assert.NotContains(t, nodeDeviceCache, defaultNodeID)
-			},
 		},
 		{
 			name:     "fail: AttachVolume returned block device already in use error",
@@ -1457,11 +1669,6 @@ func TestAttachDisk(t *testing.T) {
 					mockEC2.EXPECT().DescribeInstances(ctx, instanceRequest).Return(newDescribeInstancesOutput(nodeID), nil),
 					mockEC2.EXPECT().AttachVolume(ctx, attachRequest, gomock.Any()).Return(nil, blockDeviceInUseErr),
 				)
-			},
-			validateFunc: func(t *testing.T) {
-				assert.Contains(t, nodeDeviceCache, defaultNodeID)
-				assert.NotNil(t, nodeDeviceCache[defaultNodeID].timer)
-				assert.Contains(t, nodeDeviceCache[defaultNodeID].likelyBadNames, defaultPath)
 			},
 		},
 		{
@@ -1524,9 +1731,6 @@ func TestAttachDisk(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Reset node likely bad names cache
-			nodeDeviceCache = map[string]cachedNode{}
-
 			mockCtrl := gomock.NewController(t)
 			mockEC2 := NewMockEC2API(mockCtrl)
 			c := newCloud(mockEC2)
@@ -1550,10 +1754,6 @@ func TestAttachDisk(t *testing.T) {
 				devicePath, err := c.AttachDisk(ctx, tc.volumeID, tc.nodeID2)
 				require.NoError(t, err)
 				assert.Equal(t, tc.path, devicePath)
-			}
-
-			if tc.validateFunc != nil {
-				tc.validateFunc(t)
 			}
 
 			mockCtrl.Finish()
@@ -2459,6 +2659,118 @@ func TestResizeOrModifyDisk(t *testing.T) {
 	}
 }
 
+func TestModifyTags(t *testing.T) {
+	validTagsToAddInput := map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": "",
+	}
+
+	validTagsToDeleteInput := []string{
+		"key1",
+		"key2",
+	}
+
+	emptyTagsToAddInput := map[string]string{}
+	emptyTagsToDeleteInput := []string{}
+
+	testCases := []struct {
+		name              string
+		volumeID          string
+		negativeCase      bool
+		modifyTagsOptions ModifyTagsOptions
+		expErr            error
+	}{
+		{
+			name:     "success normal tag addition",
+			volumeID: "mod-tag-test-name",
+			modifyTagsOptions: ModifyTagsOptions{
+				TagsToAdd: validTagsToAddInput,
+			},
+			expErr: nil,
+		},
+		{
+			name:     "success normal tag deletion",
+			volumeID: "mod-tag-test-name",
+			modifyTagsOptions: ModifyTagsOptions{
+				TagsToDelete: validTagsToDeleteInput,
+			},
+			expErr: nil,
+		},
+		{
+			name:     "success normal tag addition and tag deletion",
+			volumeID: "mod-tag-test-name",
+			modifyTagsOptions: ModifyTagsOptions{
+				TagsToAdd:    validTagsToAddInput,
+				TagsToDelete: validTagsToDeleteInput,
+			},
+			expErr: nil,
+		},
+		{
+			name:         "fail: EC2 API generic error TagsToAdd",
+			volumeID:     "mod-tag-test-name",
+			negativeCase: true,
+			expErr:       fmt.Errorf("Generic EC2 API error"),
+			modifyTagsOptions: ModifyTagsOptions{
+				TagsToAdd:    validTagsToAddInput,
+				TagsToDelete: emptyTagsToDeleteInput,
+			},
+		},
+		{
+			name:         "fail: EC2 API generic error TagsToDelete",
+			volumeID:     "mod-tag-test-name",
+			negativeCase: true,
+			expErr:       fmt.Errorf("Generic EC2 API error"),
+			modifyTagsOptions: ModifyTagsOptions{
+				TagsToAdd:    emptyTagsToAddInput,
+				TagsToDelete: validTagsToDeleteInput,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockCtrl := gomock.NewController(t)
+			mockEC2 := NewMockEC2API(mockCtrl)
+			c := newCloud(mockEC2)
+
+			ctx := context.Background()
+
+			if len(tc.modifyTagsOptions.TagsToAdd) > 0 {
+				if tc.negativeCase {
+					mockEC2.EXPECT().CreateTags(gomock.Any(), gomock.Any()).Return(nil, tc.expErr).Times(1)
+				} else {
+					mockEC2.EXPECT().CreateTags(gomock.Any(), gomock.Any()).Return(&ec2.CreateTagsOutput{}, tc.expErr).Times(1)
+				}
+			}
+			if len(tc.modifyTagsOptions.TagsToDelete) > 0 {
+				if tc.negativeCase {
+					mockEC2.EXPECT().DeleteTags(gomock.Any(), gomock.Any()).Return(nil, tc.expErr).Times(1)
+				} else {
+					mockEC2.EXPECT().DeleteTags(gomock.Any(), gomock.Any()).Return(&ec2.DeleteTagsOutput{}, tc.expErr).Times(1)
+				}
+			}
+
+			err := c.ModifyTags(ctx, tc.volumeID, tc.modifyTagsOptions)
+			if err != nil {
+				if tc.expErr == nil {
+					t.Fatalf("ModifyTags() failed: expected no error, got: %v", err)
+				} else {
+					if !strings.Contains(err.Error(), tc.expErr.Error()) {
+						t.Fatalf("ModifyTags() failed: expected error %v, got: %v", tc.expErr, err)
+					}
+				}
+			} else {
+				if tc.expErr != nil {
+					t.Fatal("ModifyTags() failed: expected error, got nothing")
+				}
+			}
+
+			mockCtrl.Finish()
+		})
+	}
+}
+
 func TestGetSnapshotByName(t *testing.T) {
 	testCases := []struct {
 		name            string
@@ -3086,11 +3398,13 @@ func testVolumeWaitParameters() volumeWaitParameters {
 
 func newCloud(mockEC2 EC2API) Cloud {
 	c := &cloud{
-		region: "test-region",
-		dm:     dm.NewDeviceManager(),
-		ec2:    mockEC2,
-		rm:     newRetryManager(),
-		vwp:    testVolumeWaitParameters(),
+		region:               "test-region",
+		dm:                   dm.NewDeviceManager(),
+		ec2:                  mockEC2,
+		rm:                   newRetryManager(),
+		vwp:                  testVolumeWaitParameters(),
+		likelyBadDeviceNames: expiringcache.New[string, sync.Map](cacheForgetDelay),
+		latestClientTokens:   expiringcache.New[string, int](cacheForgetDelay),
 	}
 	return c
 }

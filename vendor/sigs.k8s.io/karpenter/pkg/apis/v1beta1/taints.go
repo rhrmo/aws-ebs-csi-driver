@@ -16,12 +16,17 @@ limitations under the License.
 
 package v1beta1
 
-import v1 "k8s.io/api/core/v1"
+import (
+	v1 "k8s.io/api/core/v1"
+
+	"sigs.k8s.io/karpenter/pkg/apis"
+)
 
 // Karpenter specific taints
 const (
-	DisruptionTaintKey             = Group + "/disruption"
+	DisruptionTaintKey             = apis.Group + "/disruption"
 	DisruptingNoScheduleTaintValue = "disrupting"
+	UnregisteredTaintKey           = apis.Group + "/unregistered"
 )
 
 var (
@@ -31,6 +36,10 @@ var (
 		Key:    DisruptionTaintKey,
 		Effect: v1.TaintEffectNoSchedule,
 		Value:  DisruptingNoScheduleTaintValue,
+	}
+	UnregisteredNoExecuteTaint = v1.Taint{
+		Key:    UnregisteredTaintKey,
+		Effect: v1.TaintEffectNoExecute,
 	}
 )
 

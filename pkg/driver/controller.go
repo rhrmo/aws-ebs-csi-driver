@@ -64,6 +64,7 @@ type ControllerService struct {
 	options               *Options
 	modifyVolumeCoalescer coalescer.Coalescer[modifyVolumeRequest, int32]
 	rpc.UnimplementedModifyServer
+	csi.UnimplementedControllerServer
 }
 
 // NewControllerService creates a new controller service
@@ -217,14 +218,14 @@ func (d *ControllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// "Values specified in mutable_parameters MUST take precedence over the values from parameters."
 	// https://github.com/container-storage-interface/spec/blob/master/spec.md#createvolume
-	if modifyOptions.VolumeType != "" {
-		volumeType = modifyOptions.VolumeType
+	if modifyOptions.modifyDiskOptions.VolumeType != "" {
+		volumeType = modifyOptions.modifyDiskOptions.VolumeType
 	}
-	if modifyOptions.IOPS != 0 {
-		iops = modifyOptions.IOPS
+	if modifyOptions.modifyDiskOptions.IOPS != 0 {
+		iops = modifyOptions.modifyDiskOptions.IOPS
 	}
-	if modifyOptions.Throughput != 0 {
-		throughput = modifyOptions.Throughput
+	if modifyOptions.modifyDiskOptions.Throughput != 0 {
+		throughput = modifyOptions.modifyDiskOptions.Throughput
 	}
 
 	responseCtx := map[string]string{}
@@ -487,7 +488,7 @@ func validateControllerUnpublishVolumeRequest(req *csi.ControllerUnpublishVolume
 }
 
 func (d *ControllerService) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
-	klog.V(4).InfoS("ControllerGetCapabilities: called", "args", *req)
+	klog.V(4).InfoS("ControllerGetCapabilities: called", "args", req)
 	var caps []*csi.ControllerServiceCapability
 	for _, cap := range controllerCaps {
 		c := &csi.ControllerServiceCapability{
@@ -503,17 +504,17 @@ func (d *ControllerService) ControllerGetCapabilities(ctx context.Context, req *
 }
 
 func (d *ControllerService) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
-	klog.V(4).InfoS("GetCapacity: called", "args", *req)
+	klog.V(4).InfoS("GetCapacity: called", "args", req)
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
 func (d *ControllerService) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
-	klog.V(4).InfoS("ListVolumes: called", "args", *req)
+	klog.V(4).InfoS("ListVolumes: called", "args", req)
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
 func (d *ControllerService) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
-	klog.V(4).InfoS("ValidateVolumeCapabilities: called", "args", *req)
+	klog.V(4).InfoS("ValidateVolumeCapabilities: called", "args", req)
 	volumeID := req.GetVolumeId()
 	if len(volumeID) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID not provided")
@@ -592,7 +593,8 @@ func (d *ControllerService) ControllerModifyVolume(ctx context.Context, req *csi
 	}
 
 	_, err = d.modifyVolumeCoalescer.Coalesce(volumeID, modifyVolumeRequest{
-		modifyDiskOptions: *options,
+		modifyDiskOptions: options.modifyDiskOptions,
+		modifyTagsOptions: options.modifyTagsOptions,
 	})
 	if err != nil {
 		return nil, err
@@ -602,7 +604,7 @@ func (d *ControllerService) ControllerModifyVolume(ctx context.Context, req *csi
 }
 
 func (d *ControllerService) ControllerGetVolume(ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
-	klog.V(4).InfoS("ControllerGetVolume: called", "args", *req)
+	klog.V(4).InfoS("ControllerGetVolume: called", "args", req)
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
@@ -685,7 +687,7 @@ func (d *ControllerService) CreateSnapshot(ctx context.Context, req *csi.CreateS
 			return nil, status.Errorf(codes.AlreadyExists, "Snapshot %s already exists for different volume (%s)", snapshotName, snapshot.SourceVolumeID)
 		}
 		klog.V(4).InfoS("Snapshot of volume already exists; nothing to do", "snapshotName", snapshotName, "volumeId", volumeID)
-		return newCreateSnapshotResponse(snapshot)
+		return newCreateSnapshotResponse(snapshot), nil
 	}
 
 	snapshotTags := map[string]string{
@@ -774,7 +776,7 @@ func (d *ControllerService) CreateSnapshot(ctx context.Context, req *csi.CreateS
 			return nil, status.Errorf(codes.Internal, "Failed to create Fast Snapshot Restores for snapshot ID %q: %v", snapshotName, err)
 		}
 	}
-	return newCreateSnapshotResponse(snapshot)
+	return newCreateSnapshotResponse(snapshot), nil
 }
 
 func validateCreateSnapshotRequest(req *csi.CreateSnapshotRequest) error {
@@ -924,7 +926,7 @@ func newCreateVolumeResponse(disk *cloud.Disk, ctx map[string]string) *csi.Creat
 		}
 	}
 
-	segments := map[string]string{ZoneTopologyKey: disk.AvailabilityZone}
+	segments := map[string]string{WellKnownZoneTopologyKey: disk.AvailabilityZone}
 
 	arn, err := arn.Parse(disk.OutpostArn)
 
@@ -950,7 +952,7 @@ func newCreateVolumeResponse(disk *cloud.Disk, ctx map[string]string) *csi.Creat
 	}
 }
 
-func newCreateSnapshotResponse(snapshot *cloud.Snapshot) (*csi.CreateSnapshotResponse, error) {
+func newCreateSnapshotResponse(snapshot *cloud.Snapshot) *csi.CreateSnapshotResponse {
 	ts := timestamppb.New(snapshot.CreationTime)
 
 	return &csi.CreateSnapshotResponse{
@@ -961,7 +963,7 @@ func newCreateSnapshotResponse(snapshot *cloud.Snapshot) (*csi.CreateSnapshotRes
 			CreationTime:   ts,
 			ReadyToUse:     snapshot.ReadyToUse,
 		},
-	}, nil
+	}
 }
 
 func newListSnapshotsResponse(cloudResponse *cloud.ListSnapshotsResponse) *csi.ListSnapshotsResponse {

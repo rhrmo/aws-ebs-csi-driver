@@ -39,9 +39,11 @@ const (
 	DefaultResizeTimout          = 1 * time.Minute
 	DefaultK8sApiPollingInterval = 5 * time.Second
 
-	AnnotationIops       = "ebs.csi.aws.com/iops"
-	AnnotationThroughput = "ebs.csi.aws.com/throughput"
-	AnnotationVolumeType = "ebs.csi.aws.com/volumeType"
+	Iops       = "iops"
+	Throughput = "throughput"
+	VolumeType = "type"
+	TagSpec    = "tagSpecification"
+	TagDel     = "tagDeletion"
 )
 
 var DefaultGeneratedVolumeMount = VolumeMountDetails{
@@ -170,4 +172,12 @@ func CreateVolumeDetails(createVolumeParameters map[string]string, volumeSize st
 	}
 
 	return &volume
+}
+
+func PrefixAnnotations(prefix string, parameters map[string]string) map[string]string {
+	result := make(map[string]string)
+	for key, value := range parameters {
+		result[prefix+key] = value
+	}
+	return result
 }

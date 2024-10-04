@@ -1,3 +1,4 @@
+{{- if not .Values.nodeComponentOnly -}}
 # Controller Service
 kind: Deployment
 apiVersion: apps/v1
@@ -320,6 +321,7 @@ spec:
           args:
             - --csi-address=$(ADDRESS)
             - --leader-election=true
+            - --v={{ .Values.sidecars.snapshotter.logLevel }}
             {{- if .Values.controller.extraCreateMetadata }}
             - --extra-create-metadata
             {{- end}}
@@ -513,7 +515,8 @@ spec:
         {{- with .Values.controller.volumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-  {{- if .Values.controller.dnsConfig }}
-  dnsConfig:
-    {{- toYaml .Values.controller.dnsConfig | nindent 4 }}
-  {{- end }}
+      {{- if .Values.controller.dnsConfig }}
+      dnsConfig:
+        {{- toYaml .Values.controller.dnsConfig | nindent 8 }}
+      {{- end }}
+{{- end }}
